@@ -47,8 +47,8 @@ Available architectures :
 | Classes   | Dataset   | Architecture  | Trainer   | Weights   |
 | :-------: | :-------: | :-----------: | :-------: | :-------: |
 | [80 classes](https://github.com/pjreddie/darknet/blob/master/data/coco.names) | [COCO](https://cocodataset.org/#home) | `YOLOv2`  | [YOLOv2's author](https://pjreddie.com/darknet/yolov2/)   | [link](https://pjreddie.com/media/files/yolov2.weights) |
-| `face`    | [Wider Face](http://shuoyang1213.me/WIDERFACE/)    | `YOLOv2`  | [me](https://github.com/yui-mhcp)   | [Google Drive](https://drive.google.com/drive/folders/1nQ4MpCxgikO-mU6gkQRsh0famnUS6Dzs?usp=sharing)    |
-| `kangaroo`    | [experiencor kangaroo](https://github.com/experiencor/kangaroo)  | `YOLOv2`  | [me](https://github.com/yui-mhcp)   | [Google Drive](https://drive.google.com/drive/folders/1CykpBAHdJhd_blpyHG_U8458nIpXz-RR?usp=sharing)  |
+| `face`    | [Wider Face](http://shuoyang1213.me/WIDERFACE/)    | `YOLOv2`  | [me](https://github.com/yui-mhcp)   | [Google Drive](https://drive.google.com/file/d/1cHP_yjDrpEzu1I5r3Um4GN9KXRCyr1O1/view?usp=sharing) |
+| `kangaroo`    | [experiencor kangaroo](https://github.com/experiencor/kangaroo)  | `YOLOv2`  | [me](https://github.com/yui-mhcp)   | [Google Drive](https://drive.google.com/file/d/12YXnXosb9PIXV9CyxXq-9W3CSr-ObgM-/view?usp=sharing)  |
 
 Models must be unzipped in the `pretrained_models/` directory !
 

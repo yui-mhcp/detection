@@ -3,7 +3,7 @@ Unidecode
 scipy
 librosa
 torch
-tensorflow==2.3.2
+tensorflow
 imageio
 numpy
 matplotlib

@@ -1141,15 +1141,20 @@ class YOLO(BaseModel):
         return config
 
     @classmethod
-    def build_from_darknet(cls, weight_path, nom, labels, ** kwargs):
-        instance = cls(labels = labels, nom = nom, ** kwargs)
+    def build_from_darknet_pretrained(cls,
+                                      weight_path   = 'yolov2.weights',
+                                      nom       = 'coco_pretrained',
+                                      labels    = COCO_CONFIG['labels'],
+                                      ** kwargs
+                                     ):
+        instance = cls(nom = nom, labels = labels, max_to_keep = 1, pretrained_name = weight_path, ** kwargs)
         
         decode_darknet_weights(instance.model, weight_path)
         
         instance.save()
         
         return instance
-        
+
 def _sigmoid(x):
     return 1. / (1. + np.exp(-x))
 
