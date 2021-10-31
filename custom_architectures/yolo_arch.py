@@ -149,7 +149,7 @@ def FullYoloBackend(input_image,
     
     model = tf.keras.Model(inputs = input_image, outputs = output, name = name)
 
-    if weight_path is not None: #and os.path.exists(weight_path):
+    if weight_path is not None and os.path.exists(weight_path):
         print("Loading weights from {}".format(weight_path))
         model.load_weights(weight_path)
 

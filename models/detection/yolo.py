@@ -328,24 +328,6 @@ class YOLO(BaseModel):
         )
         return image, output
     
-    def train_step(self, batch):
-        inputs, target = batch
-                
-        loss_fn     = self.model_loss
-        optimizer   = self.model_optimizer
-        variables   = self.model.trainable_variables
-        
-        with tf.GradientTape() as tape:
-            pred = self(inputs, training = True)
-            losses = loss_fn(target, pred)
-            loss = losses[0]
-        
-        gradients = tape.gradient(loss, variables)
-                
-        optimizer.apply_gradients(zip(gradients, variables))
-        
-        return self.update_metrics(target, pred)
-    
     def draw_prediction(self, image, boxes, labels = None, as_mask = False,
                         ** kwargs):
         if as_mask:

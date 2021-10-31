@@ -71,7 +71,7 @@ You can download `pretrained backend` at [this link](https://drive.google.com/dr
 - [ ] Add label-based model loading (without manual association)
 - [ ] Improve the face detection model
 - [ ] Add more detection models
-- [ ] Add support vor `YOLOv3` and `YOLOv4` models
+- [ ] Add support for `YOLOv3` and `YOLOv4` models
 - [ ] Add segmentation models
 
 ## Difference between `detection` and `segmentation`
