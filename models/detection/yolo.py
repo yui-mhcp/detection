@@ -3,6 +3,7 @@ import cv2
 import json
 import time
 import shutil
+import logging
 import subprocess
 import numpy as np
 import pandas as pd
@@ -10,11 +11,14 @@ import tensorflow as tf
 
 from tqdm import tqdm
 
+from loggers import DEV, TIME_LEVEL, timer
 from models.base_model import BaseModel
 from custom_architectures import get_architecture
 from utils import load_json, dump_json, time_to_string, normalize_filename, plot
 from utils.image import load_image, save_image, stream_camera, BASE_COLORS, augment_image, copy_audio
 from utils.image.box_utils import *
+
+time_logger = logging.getLogger('timer')
 
 DEFAULT_ANCHORS = [0.57273, 0.677385, 1.87446, 2.06253, 3.33843, 5.47434, 7.88282, 3.52778, 9.77052, 9.16828]
 
@@ -161,18 +165,15 @@ class YOLO(BaseModel):
         des += "Feature extractor : {}\n".format(self.backend)
         return des
     
-    def detect(self, image, get_boxes = False, ** kwargs):
-        if tf.rank(image) == 3: image = tf.expand_dims(image, axis = 0)
+    @timer(name = 'inference')
+    def detect(self, image, get_boxes = False, training = False, ** kwargs):
+        if len(tf.shape(image)) == 3: image = tf.expand_dims(image, axis = 0)
         
-        #start = time.time()
-        outputs = self(image)
-        #print("Inference time : {:.3f}".format(time.time() - start))
+        outputs = self(image, training = training)
         
         if not get_boxes: return outputs
         
-        #start = time.time()
         result = [self.decode_output(out, ** kwargs) for out in outputs]
-        #print("Decoding time : {:.3f}".format(time.time() - start))
         return result
     
     def compile(self, loss_config = {}, **kwargs):
@@ -192,16 +193,14 @@ class YOLO(BaseModel):
 
         return image
     
-    def get_output_fn(self, boxes, labels, nb_box, image_h, image_w, debug = False, 
-                      ** kwargs):
+    def get_output_fn(self, boxes, labels, nb_box, image_h, image_w, ** kwargs):
         if hasattr(boxes, 'numpy'): boxes = boxes.numpy()
         if hasattr(image_h, 'numpy'): image_h, image_w = image_h.numpy(), image_w.numpy()
         
         output      = np.zeros((self.grid_h, self.grid_w, self.nb_box, 5 + self.nb_class))
         true_boxes  = np.zeros((1, 1, 1, self.max_box_per_image, 4))
         
-        if debug:
-            print("Image with shape ({}, {}) and {} boxes :".format(image_h, image_w, len(boxes)))
+        logging.debug("Image with shape ({}, {}) and {} boxes :".format(image_h, image_w, len(boxes)))
         
         for i in range(nb_box):
             x, y, w, h = boxes[i]
@@ -216,8 +215,7 @@ class YOLO(BaseModel):
             grid_x = int(np.floor(center_x))
             grid_y = int(np.floor(center_y))
             
-            if debug:
-                print("Boxes {} ({}) go to grid ({}, {})".format(i, boxes[i], grid_y, grid_x))
+            logging.debug("Boxes {} ({}) go to grid ({}, {})".format(i, boxes[i], grid_y, grid_x))
             
             if w > 0. and h > 0. and grid_x < self.grid_w and grid_y < self.grid_h:
                 box = np.array([center_x, center_y, w, h])
@@ -237,8 +235,7 @@ class YOLO(BaseModel):
                 
                 best_anchor = np.argmax(iou)
                 
-                if debug:
-                    print("Normalized box {} with label {} to anchor idx {} with score {}".format(box, label_idx, best_anchor, iou[best_anchor]))
+                logging.debug("Normalized box {} with label {} to anchor idx {} with score {}".format(box, label_idx, best_anchor, iou[best_anchor]))
                 
                 if iou[best_anchor] > 0.:
                     output[grid_y, grid_x, best_anchor, :5] = yolo_box
@@ -258,6 +255,7 @@ class YOLO(BaseModel):
         
         return output, true_boxes
     
+    @timer(name = 'output decoding')
     def decode_output(self, output, obj_threshold = None, nms_threshold = None):
         if obj_threshold is None: obj_threshold = self.obj_threshold
         if nms_threshold is None: nms_threshold = self.nms_threshold
@@ -328,10 +326,11 @@ class YOLO(BaseModel):
         )
         return image, output
     
+    @timer(name = 'drawing')
     def draw_prediction(self, image, boxes, labels = None, as_mask = False,
                         ** kwargs):
         if as_mask:
-            return mask_boxes(image, boxes, **kwargs)
+            return mask_boxes(image, boxes, ** kwargs)
         
         kwargs.setdefault('color', BASE_COLORS)
         kwargs.setdefault('use_label', True)
@@ -339,6 +338,7 @@ class YOLO(BaseModel):
 
         return draw_boxes(image, boxes, ** kwargs)
              
+    @timer(name = 'saving')
     def save_prediction(self,
                         image,
                         boxes,
@@ -478,6 +478,7 @@ class YOLO(BaseModel):
         
         return infos_pred, infos_boxes
     
+    @timer(name = 'frame processing')
     def process_frame(self, frame, map_file = None, map_box_file = None, box_kwargs = {},
                       obj_threshold = None, nms_threshold = None, ** kwargs):
         """
@@ -559,6 +560,7 @@ class YOLO(BaseModel):
         
         stream_camera(** kwargs)
     
+    @timer
     def predict(self,
                 images,
                 
@@ -577,12 +579,11 @@ class YOLO(BaseModel):
                 
                 tqdm = lambda x: x,
                 verbose = 1,
-                debug   = False,
                 
                 plot_kwargs = {},
                 box_plot_kwargs = {},
                 videos_kwargs   = {},
-                **kwargs
+                ** kwargs
                ):
         """
             Perform prediction on `images` and compute some time statistics
@@ -606,7 +607,6 @@ class YOLO(BaseModel):
                     - 1 : plot detectedimage
                     - 2 : plot individual boxes
                     - 3 : print boxes informations
-                - debug     : whether to show time information or not
                 
                 - plot_kwargs       : kwargs for `plot()` calls
                 - box_plot_kwargs   : kwargs for `show_boxes()` call
@@ -633,8 +633,6 @@ class YOLO(BaseModel):
         if not save or show in (True, -1): show = len(images)
         if show > 0: tqdm = lambda x: x
         
-        t_process, t_infer, t_save, t_show = 0., 0., 0., 0.
-        
         # get saving directory
         
         if directory is None: directory = self.pred_dir
@@ -659,8 +657,8 @@ class YOLO(BaseModel):
         requested_images = images
         images = list(set(images))
         
-        videos = [img for img in images if img.endswith('.mp4')]
-        images = [img for img in images if not img.endswith('.mp4')]
+        videos = [img for img in images if isinstance(img, str) and img.endswith('.mp4')]
+        images = [img for img in images if not isinstance(img, str) or not img.endswith('.mp4')]
         # Predict on videos (if any)
         if len(videos) > 0:
             videos_infos = self.predict_video(
@@ -668,7 +666,7 @@ class YOLO(BaseModel):
                 save_boxes = save_boxes,
                 batch_size = batch_size, labels = labels, 
                 obj_threshold = obj_threshold, nms_threshold = nms_threshold,
-                tqdm = tqdm, debug = debug, ** videos_kwargs, ** kwargs
+                tqdm = tqdm, ** videos_kwargs, ** kwargs
             )
             # Update information on video prediction
             for video, infos in videos_infos:
@@ -678,28 +676,29 @@ class YOLO(BaseModel):
         # for each batch
         img_num = 0
         for start_idx in tqdm(range(0, len(images), batch_size)):
-            start_process = time.time()
+            time_logger.start_timer('processing')
             
             # Load images and process them
             batch       = images[start_idx : start_idx + batch_size]
             batch_images    = [load_image(img) for img in batch]
             processed   = self.get_input(batch_images)
             
-            start_infer = time.time()
-            t_process += start_infer - start_process
+            time_logger.stop_timer('processing')
+
             # Detect boxes
             boxes = self.detect(
                 processed, get_boxes = True,
                 obj_threshold = obj_threshold, nms_threshold = nms_threshold
             )
             
-            t_infer += time.time() - start_infer
-            
             # Process each prediction
             for path, image, box in zip(batch, batch_images, boxes):
                 # Maybe skip if no box detected
                 if len(box) == 0 and not save_empty:
-                    if verbose: print("No box found on {}, skip it !".format(path))
+                    logging.log(
+                        logging.INFO if verbose else DEV,
+                        "No box found on {}, skip it !".format(path)
+                    )
                     continue
                 
                 # Draw prediction on image
@@ -707,13 +706,13 @@ class YOLO(BaseModel):
                 
                 # Show predictions (if verbose > 1)
                 if verbose and img_num < show:
-                    start_show = time.time()
+                    time_logger.start_timer('showing')
 
                     img_num += 1
                     # Show individual boxes
                     if verbose > 1:
                         if verbose == 3:
-                            print("{} boxes found :\n{}".format(
+                            logging.info("{} boxes found :\n{}".format(
                                 len(box), '\n'.join([str(b) for b in box])
                             ))
 
@@ -727,45 +726,31 @@ class YOLO(BaseModel):
                         plot_type = 'imshow', ** plot_kwargs
                     )
                     
-                    t_show += time.time() - start_show
+                    time_logger.stop_timer('showing')
                 
                 # Save original image (if raw image) and save detected image
                 detected_path = detected
                 
                 infos_pred_i, infos_box_i = {}, {}
                 if save or save_boxes:
-                    start_save = time.time()
-
                     infos_pred_i, infos_box_i = self.save_prediction(
                         image, box, detected = detected, labels = labels,
                         filename = path, img_dir = img_dir, boxes_dir = boxes_dir,
                         save_detected = save, save_boxes = save,
                         extract_boxes = save_boxes
                     )
-                    
-                    t_save += time.time() - start_save
                 
                 infos_pred.update(infos_pred_i)
                 infos_boxes.update(infos_box_i)
         
         # Save information
         if save or save_boxes:
-            start_save = time.time()
+            time_logger.start_timer('saving')
             
             if save: dump_json(map_file, infos_pred, indent = 4)
             if save_boxes: dump_json(map_box_file, infos_boxes, indent = 4)
             
-            t_save += time.time() - start_save
-        
-        # Show time information
-        if debug:
-            print("Total time : {}\n- Processing time : {}\n- Inference time : {}\n- Show time : {}\n- Saving time : {}".format(
-                time_to_string(t_process + t_infer + t_show + t_save),
-                time_to_string(t_process),
-                time_to_string(t_infer),
-                time_to_string(t_show),
-                time_to_string(t_save)
-            ))
+            time_logger.stop_timer('saving')
         
         return [
             (img, infos_pred.get(img, {})) for img in requested_images
@@ -887,6 +872,7 @@ class YOLO(BaseModel):
 
         return average_precisions    
     
+    @timer
     def predict_video(self,
                       videos,
                 
@@ -905,7 +891,6 @@ class YOLO(BaseModel):
                       overwrite   = False,
                 
                       tqdm    = lambda x: x,
-                      debug   = False,
                 
                       **kwargs
                      ):
@@ -925,7 +910,6 @@ class YOLO(BaseModel):
                 - overwrite     : whether to overwriteor not already predicted image
                 
                 - tqdm      : progress bar (put to False if show > 0 or verbose)
-                - debug     : whether to show time information or not
                 
                 - kwargs            : kwargs for `draw_prediction()` call
             Return :
@@ -947,8 +931,6 @@ class YOLO(BaseModel):
         if labels is None: labels = self.labels
         if not isinstance(videos, (list, tuple)): videos = [videos]
                 
-        t_process, t_infer, t_save, t_show = 0., 0., 0., 0.
-        
         # get saving directory
         if directory is None: directory = self.pred_dir
         map_file        = os.path.join(directory, 'map_videos.json')
@@ -988,6 +970,8 @@ class YOLO(BaseModel):
                 if not save_frames or (save_frames and infos_pred[path]['frames'] is not None):
                     if not save_video or (save_video and infos_pred[path]['detected'] is not None):
                         continue
+            
+            time_logger.start_timer('video initialization')
             
             video_filename, video_frame_dir, video_boxes_dir = None, None, None
             if save_frames or save_detected:
@@ -1035,8 +1019,10 @@ class YOLO(BaseModel):
             if save_boxes:
                 infos_boxes[path] = {}
             
+            time_logger.stop_timer('video initialization')
+            
             for start_idx in tqdm(range(0, nb_frames, batch_size)):
-                start_process = time.time()
+                time_logger.start_timer('processing')
                 # Get `batch_size` frames
                 frames = []
                 for i in range(start_idx, min(start_idx + batch_size, nb_frames)):
@@ -1044,15 +1030,12 @@ class YOLO(BaseModel):
                     frames.append(frame[:, :, ::-1])
                 processed   = self.get_input(frames)
                 
-                start_infer = time.time()
-                t_process += start_infer - start_process
+                time_logger.stop_timer('processing')
                 # Detect boxes
                 boxes = self.detect(
                     processed, get_boxes = True,
                     obj_threshold = obj_threshold, nms_threshold = nms_threshold
                 )
-
-                t_infer += time.time() - start_infer
                 
                 for i, (frame, box) in enumerate(zip(frames, boxes)):
                     # Draw prediction on image
@@ -1061,14 +1044,14 @@ class YOLO(BaseModel):
                     ) if len(box) > 0 else frame
                     
                     if video_writer is not None:
+                        time_logger.start_timer('video saving')
                         frame_to_save = load_image(detected, dtype = tf.uint8).numpy()
                         video_writer.write(frame_to_save[:, :, ::-1])
-                        
+                        time_logger.stop_timer('video saving')
+
                     if len(box) == 0 and not save_empty: continue
                     
                     if save_frames or save_boxes or save_detected:
-                        start_save = time.time()
-                        
                         infos_pred_i, infos_box_i = self.save_prediction(
                             frame, box, detected = detected, labels = labels,
                             filename = 'frame_{}.jpg', img_dir = video_frame_dir, 
@@ -1079,34 +1062,23 @@ class YOLO(BaseModel):
                         
                         if save_frames: frame_infos.update(infos_pred_i)
                         if save_boxes: infos_boxes[path].update(infos_box_i)
-                        
-                        t_save += time.time() - start_save
         
             video_reader.release()
+            
             if video_writer is not None:
+                time_logger.start_timer('video saving')
                 video_writer.release()
                 copy_audio(path, video_filename)
+                time_logger.stop_timer('video saving')
         
         # Save information
         if save_frames or save_boxes:
-            start_save = time.time()
+            time_logger.start_timer('saving')
             
             if save_frames: dump_json(map_file, infos_pred, indent = 4)
             if save_boxes: dump_json(map_box_file, infos_boxes, indent = 4)
             
-            t_save += time.time() - start_save
-        
-        
-        
-        # Show time information
-        if debug:
-            print("Total time : {}\n- Processing time : {}\n- Inference time : {}\n- Show time : {}\n- Saving time : {}".format(
-                time_to_string(t_process + t_infer + t_save),
-                time_to_string(t_process),
-                time_to_string(t_infer),
-                time_to_string(t_show),
-                time_to_string(t_save)
-            ))
+            time_logger.stop_timer('saving')
         
         return [(video, infos_pred[video]) for video in requested_videos]
                                 
@@ -1123,15 +1095,17 @@ class YOLO(BaseModel):
         return config
 
     @classmethod
-    def build_from_darknet_pretrained(cls,
-                                      weight_path   = 'yolov2.weights',
-                                      nom       = 'coco_pretrained',
-                                      labels    = COCO_CONFIG['labels'],
-                                      ** kwargs
-                                     ):
-        instance = cls(nom = nom, labels = labels, max_to_keep = 1, pretrained_name = weight_path, ** kwargs)
+    def from_darknet_pretrained(cls,
+                                weight_path = 'yolov2.weights',
+                                nom     = 'coco_pretrained',
+                                labels  = COCO_CONFIG['labels'],
+                                ** kwargs
+                               ):
+        instance = cls(
+            nom = nom, labels = labels, max_to_keep = 1, pretrained_name = weight_path, ** kwargs
+        )
         
-        decode_darknet_weights(instance.model, weight_path)
+        decode_darknet_weights(instance.get_model(), weight_path)
         
         instance.save()
         

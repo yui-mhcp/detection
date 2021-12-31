@@ -192,7 +192,6 @@ class YoloGenerator(tf.keras.utils.Sequence):
                                 (0,255,0), 2)
                         
 
-        #print(' new batch created', idx)
         return img, (y_batch, b_batch)
 
     def on_epoch_end(self):
@@ -202,7 +201,7 @@ class YoloGenerator(tf.keras.utils.Sequence):
         image_name = train_instance['filename']
         image = cv2.imread(image_name)
 
-        if image is None: print('Cannot find ', image_name)
+        if image is None: logging.error('Cannot find image {}'.format(image_name))
 
         h, w, c = image.shape
         all_objs = copy.deepcopy(train_instance['box'])

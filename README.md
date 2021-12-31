@@ -13,9 +13,11 @@
 ├── datasets/               : utilities for dataset loading / processing
 │   ├── custom_datasets/    : where to save custom datasets processing
 ├── hparams/                : utility class to define modulable hyper-parameters
+├── loggers/                : some logging utilities
 ├── models/                 : main `BaseModel` subclasses directory
 │   ├── detection/          : directory for detection models
 ├── pretrained_models/      : saving directory for pretrained models
+├── unitest/                : custom unitest framework to test models' consistency
 └── utils/                  : utilities for data processing
 ```
 

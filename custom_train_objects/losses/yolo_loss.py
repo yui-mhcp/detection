@@ -35,6 +35,22 @@ class YoloLoss(tf.keras.losses.Loss):
     def loss_names(self):
         return ['loss', 'loss_xy', 'loss_wh', 'loss_conf', 'loss_class']
     
+    def compute_loss(self, y_true, y_pred, mask, batch_size, criterion = 'square'):
+        if criterion == 'mse':
+            error = tf.square(y_true - y_pred)
+        elif criterion == 'categorical':
+            error = tf.keras.losses.categorical_crossentropy(y_true, y_pred)
+        elif criterion == 'binary':
+            error = tf.keras.losses.binary_crossentropy(y_true, y_pred)
+        else:
+            error = tf.abs(y_true - y_pred)
+        
+        nb_box  = tf.reduce_sum(tf.cast(
+            tf.reshape(mask, [batch_size, -1]) > 0.0, tf.float32
+        ), axis = -1) + 1e-6
+        
+        return tf.reduce_sum(tf.reshape(error * mask, [batch_size, -1]), axis = -1) / nb_box
+    
     def call(self, y_true, y_pred):
         y_true, true_boxes = y_true
         
@@ -164,23 +180,20 @@ class YoloLoss(tf.keras.losses.Loss):
         """
         Finalize the loss
         """
-        nb_coord_box = tf.reduce_sum(tf.cast(coord_mask > 0.0, tf.float32)) + 1e-6
-        nb_conf_box  = tf.reduce_sum(tf.cast(conf_mask  > 0.0, tf.float32)) + 1e-6
-        nb_class_box = tf.reduce_sum(tf.cast(class_mask > 0.0, tf.float32)) + 1e-6
+        loss_xy = self.compute_loss(true_box_xy, pred_box_xy, coord_mask, batch_size, 'mse') / 2.
+        loss_wh = self.compute_loss(true_box_wh, pred_box_wh, coord_mask, batch_size, 'mse') / 2.
         
-        loss_xy    = tf.reduce_sum(tf.square(true_box_xy - pred_box_xy)     * coord_mask) / nb_coord_box / 2.
-        loss_wh    = tf.reduce_sum(tf.square(true_box_wh - pred_box_wh)     * coord_mask) / nb_coord_box / 2.
+        loss_conf   = self.compute_loss(
+            true_box_conf, pred_box_conf, conf_mask, batch_size, 'mse'
+        )
+        loss_class  = self.compute_loss(
+            true_box_class, pred_box_class, class_mask, batch_size, 'categorical'
+        )
         
         """loss_conf = tf.reduce_mean(tf.keras.losses.binary_crossentropy(
             tf.reshape(true_box_conf, [-1, 1]),
             tf.reshape(pred_box_conf, [-1, 1])
         ) * tf.reshape(conf_mask, [-1, 1]))"""
-        
-        loss_conf  = tf.reduce_sum(tf.square(true_box_conf - pred_box_conf) * conf_mask)  / nb_conf_box / 2.
-        loss_class = tf.keras.losses.categorical_crossentropy(
-            true_box_class, pred_box_class
-        )
-        loss_class = tf.reduce_sum(loss_class * class_mask) / nb_class_box
         
         loss = tf.cond(
             self.seen < self.warmup_epochs,
@@ -188,7 +201,7 @@ class YoloLoss(tf.keras.losses.Loss):
             lambda: loss_xy + loss_wh + loss_conf + loss_class
         )
         
-        return loss, loss_xy, loss_wh, loss_conf, loss_class
+        return tf.stack([loss, loss_xy, loss_wh, loss_conf, loss_class], 0)
     
     def get_config(self):
         config = super().get_config()
