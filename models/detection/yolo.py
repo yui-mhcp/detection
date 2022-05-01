@@ -12,11 +12,8 @@
 
 import os
 import cv2
-import json
-import time
 import shutil
 import logging
-import subprocess
 import numpy as np
 import pandas as pd
 import tensorflow as tf
@@ -24,9 +21,9 @@ import tensorflow as tf
 from tqdm import tqdm
 
 from loggers import DEV, TIME_LEVEL, timer
-from models.base_model import BaseModel
 from custom_architectures import get_architecture
-from utils import load_json, dump_json, time_to_string, normalize_filename, plot
+from models.interfaces.base_image_model import BaseImageModel
+from utils import load_json, dump_json, normalize_filename, plot
 from utils.image import load_image, save_image, stream_camera, BASE_COLORS, augment_image, copy_audio
 from utils.image.box_utils import *
 
@@ -43,9 +40,20 @@ VOC_CONFIG  = {
     'anchors'   : DEFAULT_ANCHORS #[1.3221, 1.73145, 3.19275, 4.00944, 5.05587, 8.09892, 9.47112, 4.84053, 11.2364, 10.0071]
 }
 
+def update_box_labels(images, boxes, classifier, ** kwargs):
+    img_boxes = []
+    for img, box in zip(images, boxes):
+        img_boxes.extend(crop_box(img, box, ** kwargs))
+    
+    labels = classifier.predict(frame_boxes)
+    
+    label_idx = 0
+    for box in boxes:
+        for b in box:
+            b.label = labels[label_idx]
+            label_idx += 1
 
-
-class YOLO(BaseModel):
+class YOLO(BaseImageModel):
     def __init__(self,
                  labels, 
                  max_box_per_image  = 100,
@@ -62,16 +70,15 @@ class YOLO(BaseModel):
                  **kwargs
                 ):
         assert len(anchors) % 2 == 0
-        if isinstance(input_size, int): input_size = (input_size, input_size, 3)
+
+        self._init_image(input_size = input_size, ** kwargs)
         
-        self.input_size = tuple(input_size)
         self.backend    = backend
         self.anchors    = anchors
         self.max_box_per_image = max_box_per_image
 
         self.labels   = list(labels) if not isinstance(labels, str) else [labels]
-        self.nb_class = nb_class if nb_class is not None else len(self.labels)
-        self.nb_class = max(2, self.nb_class)
+        self.nb_class = max(2, nb_class if nb_class is not None else len(self.labels))
         if self.nb_class > len(self.labels):
             self.labels += [''] * (self.nb_class - len(self.labels))
         
@@ -90,26 +97,22 @@ class YOLO(BaseModel):
         os.makedirs(self.stream_img_dir, exist_ok = True)
         os.makedirs(self.stream_boxes_dir, exist_ok = True)
     
-    def init_train_config(self,
-                          augment_methods = ['hue', 'brightness', 'saturation', 'contrast', 'noise'],
-                          ** kwargs
-                          ):
-        self.augment_methods    = augment_methods
-
-        super().init_train_config(** kwargs)
+    def init_train_config(self, * args, ** kwargs):
+        super().init_train_config(* args, ** kwargs)
         
         if hasattr(self, 'model_loss'):
             self.model_loss.seen = self.current_epoch
             
     def _build_model(self, flatten = True, randomize = True, ** kwargs):
         feature_extractor = get_architecture(
-            architecture_name = self.backend, input_image = self.input_size, ** kwargs
+            architecture_name = self.backend, input_shape = self.input_size, include_top = False,
+            ** kwargs
         )
         
         super()._build_model(model = {
             'architecture_name' : 'yolo',
             'feature_extractor' : feature_extractor,
-            'input_size'        : self.input_size,
+            'input_shape'       : self.input_size,
             'nb_class'      : self.nb_class,
             'nb_box'        : self.nb_box,
             'flatten'       : flatten,
@@ -137,12 +140,6 @@ class YOLO(BaseModel):
         return os.path.join(self.stream_dir, "boxes")
     
     @property
-    def input_signature(self):
-        return tf.TensorSpec(
-            shape = (None,) + self.input_size, dtype = tf.float32
-        )
-    
-    @property
     def output_signature(self):
         return (
             tf.TensorSpec(
@@ -151,12 +148,6 @@ class YOLO(BaseModel):
             tf.TensorSpec(
                 shape = (None, 1, 1, 1, self.max_box_per_image, 4), dtype = tf.float32
             )
-        )
-    
-    @property
-    def training_hparams(self):
-        return super().training_hparams(
-            augment_methods = ['hue', 'brightness', 'saturation', 'contrast', 'noise']
         )
     
     @property
@@ -171,22 +162,42 @@ class YOLO(BaseModel):
     def grid_w(self):
         return self.output_shape[2]
         
+    @property
+    def training_hparams(self):
+        return super().training_hparams(** self.training_hparams_image)
+    
     def __str__(self):
         des = super().__str__()
+        des += self._str_image()
         des += "Labels (n = {}) : {}\n".format(len(self.labels), self.labels)
         des += "Feature extractor : {}\n".format(self.backend)
         return des
     
     @timer(name = 'inference')
     def detect(self, image, get_boxes = False, training = False, ** kwargs):
+        """
+            Perform prediction on `image` and returns either the model's output either the boxes
+            
+            Arguments :
+                - image : tf.Tensor of rank 3 or 4 (single / batched image(s))
+                - get_boxes : bool, whether to decode the model's output or not
+                - training  : whether to make prediction in training mode
+                - kwargs    : given to `decode_output` if `get_boxes`
+            Return :
+                if `get_boxes == False` :
+                    model's output of shape (B, grid_h, grid_w, nb_box, 5 + nb_class)
+                else:
+                    list of boxes (where boxes is the list of BoundingBox for detected objects)
+                
+        """
+        if not isinstance(image, tf.Tensor): image = tf.cast(image, tf.float32)
         if len(tf.shape(image)) == 3: image = tf.expand_dims(image, axis = 0)
         
         outputs = self(image, training = training)
         
         if not get_boxes: return outputs
         
-        result = [self.decode_output(out, ** kwargs) for out in outputs]
-        return result
+        return [self.decode_output(out, ** kwargs) for out in outputs]
     
     def compile(self, loss_config = {}, **kwargs):
         kwargs['loss'] = 'YoloLoss'
@@ -196,14 +207,7 @@ class YOLO(BaseModel):
         super().compile(loss_config = loss_config, ** kwargs)
     
     def get_input(self, filename):
-        if isinstance(filename, list):
-            return tf.stack([self.get_input(f) for f in filename])
-        elif isinstance(filename, pd.DataFrame):
-            return tf.stack([self.get_input(row) for idx, row in filename.iterrows()])
-        
-        image = load_image(filename, target_shape = self.input_size, mode = 'rgb')
-
-        return image
+        return self.get_image(filename)
     
     def get_output_fn(self, boxes, labels, nb_box, image_h, image_w, ** kwargs):
         if hasattr(boxes, 'numpy'): boxes = boxes.numpy()
@@ -268,7 +272,7 @@ class YOLO(BaseModel):
         return output, true_boxes
     
     @timer(name = 'output decoding')
-    def decode_output(self, output, obj_threshold = None, nms_threshold = None):
+    def decode_output(self, output, obj_threshold = None, nms_threshold = None, ** kwargs):
         if obj_threshold is None: obj_threshold = self.obj_threshold
         if nms_threshold is None: nms_threshold = self.nms_threshold
         
@@ -327,20 +331,23 @@ class YOLO(BaseModel):
         return boxes
     
     def encode_data(self, data):
-        image   = load_image(data, target_shape = self.input_size[:2])
+        image   = self.get_input(data)
         outputs = self.get_output(data)
         
         return image, outputs
     
     def augment_data(self, image, output):
-        image = augment_image(
-            image, self.augment_methods, self.augment_prct / len(self.augment_methods)
-        )
+        image = self.augment_image(image)
+
+        return image, output
+    
+    def preprocess_data(self, image, output):
+        image = self.preprocess_image(image)
+
         return image, output
     
     @timer(name = 'drawing')
-    def draw_prediction(self, image, boxes, labels = None, as_mask = False,
-                        ** kwargs):
+    def draw_prediction(self, image, boxes, labels = None, as_mask = False, ** kwargs):
         if as_mask:
             return mask_boxes(image, boxes, ** kwargs)
         
@@ -359,8 +366,8 @@ class YOLO(BaseModel):
                         dezoom_factor   = 1.,
                         
                         img_dir     = None,
-                        detected_dir    = None,
                         boxes_dir   = None,
+                        detected_dir    = None,
                         
                         filename        = 'image_{}.jpg',
                         detected_name   = '{}_detected.jpg',
@@ -492,7 +499,7 @@ class YOLO(BaseModel):
     
     @timer(name = 'frame processing')
     def process_frame(self, frame, map_file = None, map_box_file = None, box_kwargs = {},
-                      obj_threshold = None, nms_threshold = None, ** kwargs):
+                      classifier = None, ** kwargs):
         """
             Detect objects on a single frame and save it (if required)
             
@@ -507,9 +514,11 @@ class YOLO(BaseModel):
         processed = self.get_input(frame)
 
         boxes = self.detect(
-            processed, get_boxes = True,
-            obj_threshold = obj_threshold, nms_threshold = nms_threshold
+            processed, get_boxes = True, ** kwargs
         )[0]
+        
+        if classifier is not None:
+            update_box_labels([frame], [boxes], classifier = classifier, ** box_kwargs)
         
         detected = self.draw_prediction(frame, boxes, ** box_kwargs)
         
@@ -529,6 +538,7 @@ class YOLO(BaseModel):
 
         return detected
     
+    @timer
     def stream(self, save = False, save_boxes = False, overwrite = False,
                directory = None, ** kwargs):
         map_file, map_box_file, img_dir, boxes_dir = None, None, None, None
@@ -577,10 +587,8 @@ class YOLO(BaseModel):
                 images,
                 
                 labels  = None,
+                classifier  = None,
                 batch_size  = 16,
-                
-                obj_threshold   = None,
-                nms_threshold   = None,
                 
                 show    = 0,
                 save    = True,
@@ -674,10 +682,8 @@ class YOLO(BaseModel):
         # Predict on videos (if any)
         if len(videos) > 0:
             videos_infos = self.predict_video(
-                videos, directory = directory, overwrite = overwrite, 
-                save_boxes = save_boxes,
-                batch_size = batch_size, labels = labels, 
-                obj_threshold = obj_threshold, nms_threshold = nms_threshold,
+                videos, directory = directory, overwrite = overwrite, save_boxes = save_boxes,
+                batch_size = batch_size, labels = labels, classifier = classifier,
                 tqdm = tqdm, ** videos_kwargs, ** kwargs
             )
             # Update information on video prediction
@@ -699,9 +705,12 @@ class YOLO(BaseModel):
 
             # Detect boxes
             boxes = self.detect(
-                processed, get_boxes = True,
-                obj_threshold = obj_threshold, nms_threshold = nms_threshold
+                processed, get_boxes = True, ** kwargs
             )
+            if classifier is not None:
+                update_box_labels(
+                    images = batch_images, boxes = boxes, classifier = classifier, ** kwargs
+                )
             
             # Process each prediction
             for path, image, box in zip(batch, batch_images, boxes):
@@ -889,10 +898,8 @@ class YOLO(BaseModel):
                       videos,
                 
                       labels  = None,
-                      batch_size  = 16,
-                      
-                      obj_threshold = None,
-                      nms_threshold = None,
+                      classifier    = None,
+                      batch_size    = 16,
                       
                       save_frames = False,
                       save_boxes  = False,
@@ -1044,10 +1051,10 @@ class YOLO(BaseModel):
                 
                 time_logger.stop_timer('processing')
                 # Detect boxes
-                boxes = self.detect(
-                    processed, get_boxes = True,
-                    obj_threshold = obj_threshold, nms_threshold = nms_threshold
-                )
+                boxes = self.detect(processed, get_boxes = True, ** kwargs)
+                
+                if classifier is not None:
+                    update_box_labels(frames, boxes, classifier, ** kwargs)
                 
                 for i, (frame, box) in enumerate(zip(frames, boxes)):
                     # Draw prediction on image
@@ -1096,13 +1103,15 @@ class YOLO(BaseModel):
                                 
     def get_config(self, * args, ** kwargs):
         config = super().get_config(* args, ** kwargs)
-        config['anchors']       = self.anchors
-        config['backend']       = self.backend
-        config['input_size']    = self.input_size
-
-        config['labels']        = self.labels
-        config['nb_class']      = self.nb_class
-        config['max_box_per_image'] = self.max_box_per_image
+        config.update({
+            ** self.get_config_image(),
+            'anchors'   : self.anchors,
+            'backend'   : self.backend,
+            
+            'labels'    : self.labels,
+            'nb_class'  : self.nb_class,
+            'max_box_per_image' : self.max_box_per_image
+        })
         
         return config
 
@@ -1177,4 +1186,3 @@ class WeightReader:
     
     def reset(self):
         self.offset = 4
-

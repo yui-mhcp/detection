@@ -70,7 +70,7 @@ You can download `pretrained backend` at [this link](https://drive.google.com/dr
 - [x] Make the TO-DO list
 - [x] Support pretrained COCO model
 - [x] Add weights for face detection
-- [ ] Add label-based model loading (without manual association)
+- [x] Add label-based model loading (without manual association)
 - [ ] Improve the face detection model
 - [ ] Add more detection models
 - [ ] Add support for `YOLOv3` and `YOLOv4` models
@@ -78,7 +78,7 @@ You can download `pretrained backend` at [this link](https://drive.google.com/dr
 
 ## Difference between `detection` and `segmentation`
 
-Main methods in object *detection* in image are `detection` with `bounding boxes` and `pixel-wise segmentation`. These 2 approaches tends to detect position of objects in an image but with different level of precision. This difference has an impact on the model architecture as the required output shape is not thesame. 
+Main methodologies in *object detection* in image are `detection` with `bounding boxes` and `pixel-wise segmentation`. These 2 approaches tends to detect position of objects in an image but with different level of precision. This difference has an impact on the model architecture as the required output shape is not thesame. 
 
 Here is a comparison of both approaches based on some criteria :
 

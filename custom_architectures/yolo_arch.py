@@ -20,20 +20,22 @@ from custom_architectures.current_blocks import Conv2DBN
 FULL_YOLO_BACKEND_PATH  = "pretrained_models/yolo_backend/full_yolo_backend.h5"
 TINY_YOLO_BACKEND_PATH  = "pretrained_models/yolo_backend/tiny_yolo_backend.h5"
 
-def FullYoloBackend(input_image,
+def FullYoloBackend(input_shape,
                     weight_path = FULL_YOLO_BACKEND_PATH,
                    
-                    name = 'feature_extractor'
+                    name = 'feature_extractor',
+                    ** kwargs
                    ):
     # the function to implement the orgnization layer (thanks to github.com/allanzelener/YAD2K)
     def space_to_depth_x2(x):
         import tensorflow as tf
         return tf.nn.space_to_depth(x, block_size = 2)
     
-    if isinstance(input_image, int): input_image = (input_image, input_image, 3)
-    if isinstance(input_image, tuple):
-        input_image = tf.keras.layers.Input(shape = input_image, name = 'input_image')
-
+    input_image = input_shape
+    if isinstance(input_shape, int): input_shape = (input_shape, input_shape, 3)
+    if isinstance(input_shape, tuple):
+        input_image = tf.keras.layers.Input(shape = input_shape, name = 'input_image')
+    
 
     x = input_image
     # Layers 1 and 2
@@ -165,17 +167,21 @@ def FullYoloBackend(input_image,
     if weight_path is not None and os.path.exists(weight_path):
         logging.info("Loading weights from {}".format(weight_path))
         model.load_weights(weight_path)
+    elif weight_path is not None:
+        logging.warning('Weight file {} does not exist !'.format(weight_path))
 
     return model
 
-def TinyYoloBackend(input_image,
-                    weight_path = FULL_YOLO_BACKEND_PATH,
+def TinyYoloBackend(input_shape,
+                    weight_path = TINY_YOLO_BACKEND_PATH,
                    
-                    name = 'feature_extractor'
+                    name = 'feature_extractor',
+                    ** kwargs
                    ):
-    if isinstance(input_image, int): input_image = (input_image, input_image, 3)
-    if isinstance(input_image, tuple):
-        input_image = tf.keras.layers.Input(shape = input_image, name = 'input_image')
+    input_image = input_shape
+    if isinstance(input_shape, int): input_shape = (input_shape, input_shape, 3)
+    if isinstance(input_shape, tuple):
+        input_image = tf.keras.layers.Input(shape = input_shape, name = 'input_image')
 
     # Layer 1
     x = Conv2DBN(
@@ -221,18 +227,21 @@ def TinyYoloBackend(input_image,
 
             name = 'conv_{}'.format(i+7)
         )
-
+    
     model = tf.keras.Model(inputs = input_image, outputs = x, name = name)
 
     if weight_path is not None and os.path.exists(weight_path):
+        logging.info('Loading backend weights from {}'.format(weight_path))
         model.load_weights(weight_path)
+    elif weight_path is not None:
+        logging.warning('Weight file {} does not exist !'.format(weight_path))
 
     return model
 
 def YOLO(feature_extractor,
          nb_class,
          nb_box     = 5,
-         input_size = None,
+         input_shape    = None,
          flatten    = True,
          randomize  = True,
          name       = 'yolo',
@@ -240,13 +249,13 @@ def YOLO(feature_extractor,
         ):
     assert isinstance(feature_extractor, tf.keras.Model)
     
-    if isinstance(input_size, int): input_size = (input_size, input_size, 3)
+    if isinstance(input_shape, int): input_shape = (input_shape, input_shape, 3)
     
-    if input_size is None or input_size == feature_extractor.input.shape[1:] and flatten:
+    if input_shape is None or input_shape == feature_extractor.input.shape[1:] and flatten:
         input_image = feature_extractor.input
         features    = feature_extractor.output
     else:
-        input_image = tf.keras.layers.Input(shape = input_size, name = 'input_image')
+        input_image = tf.keras.layers.Input(shape = input_shape, name = 'input_image')
         features    = feature_extractor(input_image)
     
     grid_h, grid_w = features.shape[1:3]     

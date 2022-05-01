@@ -14,18 +14,14 @@ import os
 
 from unitest import Test, assert_function, assert_model_output, assert_equal
 
-_filename = os.path.join('test', '__datas', 'lena.jpg')
+_filename = os.path.join('unitest', '__datas', 'lena.jpg')
 
-def test_yolo(model_name):
+@Test(sequential = True, model_dependant = 'yolo_faces')
+def test_yolo_faces():
     from utils.image import load_image
     from models.detection import YOLO
-    from models.model_utils import is_model_name
-
-    if not is_model_name(model_name):
-        print("Model {} does not exist, skipping its consistency test !".format(model_name))
-        return
     
-    model = YOLO(nom = model_name)
+    model = YOLO(nom = 'yolo_faces')
     
     image = load_image(_filename, target_shape = model.input_size)
     
@@ -46,6 +42,3 @@ def test_yolo(model_name):
     assert_function(model.draw_prediction, image, boxes)
     assert_function(model.draw_prediction, image, boxes, as_mask = True)
 
-@Test(sequential = True, model_dependant = 'yolo_faces')
-def test_yolo_face():
-    test_yolo('yolo_faces')

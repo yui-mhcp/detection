@@ -1,21 +1,49 @@
-imgaug
-Unidecode
-scipy
 librosa
-torch
-tensorflow
-imageio
-numpy
 matplotlib
-pytube3
-opencv-python
-num2words
-python_speech_features
-tqdm
-umap_learn
+numpy==1.20.0
+opencv_python
 pandas
-pydub
-noisereduce
-moviepy
+regex
+requests
+tensorflow
 tensorflow_datasets
+torch
+tqdm
+transformers
+umap_learn
+Unidecode
+pydot
+
+# special imports
+
+# audio loading / processing
+scipy
+# read audio from video
+moviepy
+# for youtube video loading
+pytube3
+# noise reduction
+noisereduce
+# for a specific STFT class (DeepSpeechSTFT)
+python_speech_features
+
+# for audio loading
+pydub
+# for GIF creation
+imageio
+# for YOLO generator
+imgaug
+
+# for k-means
 kneed
+
+# for text processing
+num2words
+
+# for STT streaming
+sounddevice
+
+# for Q&A / maggie bot
+discord
+google
+async_timeout

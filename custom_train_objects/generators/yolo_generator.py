@@ -17,8 +17,6 @@ import numpy as np
 import pandas as pd
 import tensorflow as tf
 
-from imgaug import augmenters as iaa
-
 from utils.image import *
 
 class YoloGenerator(tf.keras.utils.Sequence):
@@ -27,6 +25,8 @@ class YoloGenerator(tf.keras.utils.Sequence):
                        shuffle=True, 
                        jitter=True, 
                        norm=None):
+        from imgaug import augmenters as iaa
+
         self.generator = None
 
         self.images = images if not isinstance(images, pd.DataFrame) else images.to_dict('records')
