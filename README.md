@@ -74,7 +74,8 @@ You can download `pretrained backend` at [this link](https://drive.google.com/dr
 - [ ] Improve the face detection model
 - [ ] Add more detection models
 - [ ] Add support for `YOLOv3` and `YOLOv4` models
-- [ ] Add segmentation models
+- [ ] Add segmentation models (such as `U-Net`)
+- [x] Add `producer-consumer` based prediction / streaming
 
 ## Difference between `detection` and `segmentation`
 
@@ -129,6 +130,8 @@ Papers and tutorials :
 - [2] [YOLO9000 : better, stronger, faster](https://arxiv.org/abs/1612.08242v1) : the original YOLOv2 paper
 - [3] [darknet's website](https://pjreddie.com/darknet/yolov2/) : the official releases of YOLOv2
 - [4] [Gentle guide on how YOLO object detection works](https://hackernoon.com/gentle-guide-on-how-yolo-object-localization-works-with-keras-part-1-aec99277f56f) : good tutorial explaning the image detection mechanism
+- [5] [U-Net: Convolutional Networks for Biomedical Image Segmentation](https://arxiv.org/abs/1505.04597) : U-net original paper
+- [6] [image segmentation tutorials](https://www.tensorflow.org/tutorials/images/segmentation) : U-net implementation in tensorflow + image segmentation tutorial
 
 Datasets :
 - [COCO](https://cocodataset.org/#home) dataset : 80 labels dataset for object detection in real context

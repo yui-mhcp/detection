@@ -247,7 +247,7 @@ def YOLO(feature_extractor,
          name       = 'yolo',
          ** kwargs
         ):
-    assert isinstance(feature_extractor, tf.keras.Model)
+    assert isinstance(feature_extractor, tf.keras.Model), 'Unhandled feature extractor (type {}) : {} '.format(type(feature_extractor), feature_extractor)
     
     if isinstance(input_shape, int): input_shape = (input_shape, input_shape, 3)
     
