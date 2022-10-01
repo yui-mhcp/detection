@@ -3,27 +3,29 @@
 ## Project structure
 
 ```bash
-├── custom_architectures/   : custom architectures
-├── custom_layers/          : custom layers
-├── custom_train_objects/   : custom objects for training
-│   ├── callbacks/          : custom callbacks
-│   ├── generators/         : custom data generators
-│   ├── losses/             : custom losses
-│   ├── optimizers/         : custom optimizers / lr schedulers
-├── datasets/               : utilities for dataset loading / processing
-│   ├── custom_datasets/    : where to save custom datasets processing
-├── hparams/                : utility class to define modulable hyper-parameters
-├── loggers/                : some logging utilities
-├── models/                 : main `BaseModel` subclasses directory
-│   ├── detection/          : directory for detection models
-├── pretrained_models/      : saving directory for pretrained models
-├── unitest/                : custom unitest framework to test models' consistency
-└── utils/                  : utilities for data processing
-```
+├── custom_architectures
+│   └── yolo_arch.py            : defines the YOLOv2 architecture
+├── custom_layers
+├── custom_train_objects
+│   ├── generators
+│   │   └── yolo_generator.py   : generator class for YOLO data (must be cleaned and updated)
+│   ├── losses
+│   │   └── yolo_loss.py        : main YOLOLoss class
+├── datasets
+├── hparams
+├── loggers
+├── models
+│   ├── detection
+│   │   └── yolo.py         : main YOLO class
+├── pretrained_models
+│   └── yolo_backend        : directory where to save the yolo_backend weights
+├── unitest
+├── utils
+├── detection.ipynb
+├── example_yolo.ipynb
+└── example_yolo_generator.ipynb```
 
-See [my data_processing repo](https://github.com/yui-mhcp/data_processing) for more information on the `utils` module and `data processing` features.
-
-See [my base project](https://github.com/yui-mhcp/base_dl_project) for more information on the `BaseModel` class, supported datasets, project extension, ...
+Check [the main project](https://github.com/yui-mhcp/base_dl_project) for more information about the unextended modules / structure / main classes. 
 
 ## Available features
 
@@ -76,6 +78,7 @@ You can download `pretrained backend` at [this link](https://drive.google.com/dr
 - [ ] Add support for `YOLOv3` and `YOLOv4` models
 - [ ] Add segmentation models (such as `U-Net`)
 - [x] Add `producer-consumer` based prediction / streaming
+- [x] Automatically downloads the official pretrained weights if not loaded
 
 ## Difference between `detection` and `segmentation`
 
@@ -95,6 +98,12 @@ Here is a comparison of both approaches based on some criteria :
 | Support multi-label classification    | yes, by design        | I guess yes but not its main application  |
 
 \* This is the classical output shape of `YOLO` models. The last dimension is `[x, y, w, h, confidence, * class_score]`
+
+## Pipeline-based prediction
+
+The `YOLO` model supports the pipeline-based prediction, meaning that all the tasks you see in the below graph are multi-threaded. Check the [data_processing project](https://github.com/yui-mhcp/data_processing) for a better understanding of the `producer-consumer` framework. 
+
+![Detection pipeline](detection_pipeline.jpg)
 
 ## Contacts and licence
 

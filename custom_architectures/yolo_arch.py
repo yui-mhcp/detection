@@ -17,6 +17,8 @@ import tensorflow as tf
 
 from custom_architectures.current_blocks import Conv2DBN
 
+logger = logging.getLogger(__name__)
+
 FULL_YOLO_BACKEND_PATH  = "pretrained_models/yolo_backend/full_yolo_backend.h5"
 TINY_YOLO_BACKEND_PATH  = "pretrained_models/yolo_backend/tiny_yolo_backend.h5"
 
@@ -165,10 +167,10 @@ def FullYoloBackend(input_shape,
     model = tf.keras.Model(inputs = input_image, outputs = output, name = name)
 
     if weight_path is not None and os.path.exists(weight_path):
-        logging.info("Loading weights from {}".format(weight_path))
+        logger.info("Loading weights from {}".format(weight_path))
         model.load_weights(weight_path)
     elif weight_path is not None:
-        logging.warning('Weight file {} does not exist !'.format(weight_path))
+        logger.warning('Weight file {} does not exist !'.format(weight_path))
 
     return model
 
@@ -231,10 +233,10 @@ def TinyYoloBackend(input_shape,
     model = tf.keras.Model(inputs = input_image, outputs = x, name = name)
 
     if weight_path is not None and os.path.exists(weight_path):
-        logging.info('Loading backend weights from {}'.format(weight_path))
+        logger.info('Loading backend weights from {}'.format(weight_path))
         model.load_weights(weight_path)
     elif weight_path is not None:
-        logging.warning('Weight file {} does not exist !'.format(weight_path))
+        logger.warning('Weight file {} does not exist !'.format(weight_path))
 
     return model
 

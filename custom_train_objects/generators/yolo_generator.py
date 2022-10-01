@@ -13,11 +13,14 @@
 import os
 import cv2
 import copy
+import logging
 import numpy as np
 import pandas as pd
 import tensorflow as tf
 
 from utils.image import *
+
+logger = logging.getLogger(__name__)
 
 class YoloGenerator(tf.keras.utils.Sequence):
     def __init__(self, images, 
@@ -213,7 +216,7 @@ class YoloGenerator(tf.keras.utils.Sequence):
         image_name = train_instance['filename']
         image = cv2.imread(image_name)
 
-        if image is None: logging.error('Cannot find image {}'.format(image_name))
+        if image is None: logger.error('Cannot find image {}'.format(image_name))
 
         h, w, c = image.shape
         all_objs = copy.deepcopy(train_instance['box'])

@@ -12,6 +12,8 @@
 
 import os
 import cv2
+import glob
+import time
 import shutil
 import logging
 import numpy as np
@@ -20,17 +22,21 @@ import tensorflow as tf
 
 from tqdm import tqdm
 
-from loggers import DEV, TIME_LEVEL, timer
+from loggers import timer
+from utils.thread_utils import Pipeline
 from custom_architectures import get_architecture
 from models.interfaces.base_image_model import BaseImageModel
-from utils import load_json, dump_json, normalize_filename, plot
+from utils import load_json, dump_json, normalize_filename, download_file, plot
 from utils.image import _video_formats, _image_formats, load_image, save_image, stream_camera, BASE_COLORS, get_video_infos
 from utils.image.box_utils import *
-from utils.thread_utils import Producer, ThreadedDict
 
-time_logger = logging.getLogger('timer')
+logger      = logging.getLogger(__name__)
 
-DEFAULT_ANCHORS = [0.57273, 0.677385, 1.87446, 2.06253, 3.33843, 5.47434, 7.88282, 3.52778, 9.77052, 9.16828]
+PRETRAINED_COCO_URL = 'https://pjreddie.com/media/files/yolov2.weights'
+
+DEFAULT_ANCHORS = [
+    0.57273, 0.677385, 1.87446, 2.06253, 3.33843, 5.47434, 7.88282, 3.52778, 9.77052, 9.16828
+]
 
 COCO_CONFIG = {
     'labels' : ['person', 'bicycle', 'car', 'motorbike', 'aeroplane', 'bus', 'train', 'truck', 'boat', 'traffic light', 'fire hydrant', 'stop sign', 'parking meter', 'bench', 'bird', 'cat', 'dog', 'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe', 'backpack', 'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee', 'skis', 'snowboard', 'sports ball', 'kite', 'baseball bat', 'baseball glove', 'skateboard', 'surfboard', 'tennis racket', 'bottle', 'wine glass', 'cup', 'fork', 'knife', 'spoon', 'bowl', 'banana', 'apple', 'sandwich', 'orange', 'brocoli', 'carrot', 'hot dog', 'pizza', 'donut', 'cake', 'chair', 'sofa', 'pottedplant', 'bed', 'diningtable', 'toilet', 'tvmonitor', 'laptop', 'mouse', 'remote', 'keyboard', 'cell phone', 'microwave', 'oven', 'toaster', 'sink', 'refrigerator', 'book', 'clock', 'vase', 'scissors', 'teddy bear', 'hair drier', 'toothbrush'],
@@ -40,19 +46,6 @@ VOC_CONFIG  = {
     'labels' : ['aeroplane', 'bicycle', 'bird', 'boat', 'bottle', 'bus', 'car', 'cat', 'chair', 'cow', 'diningtable', 'dog', 'horse', 'motorbike', 'person', 'pottedplant', 'sheep', 'sofa', 'train', 'tvmonitor'],
     'anchors'   : DEFAULT_ANCHORS #[1.3221, 1.73145, 3.19275, 4.00944, 5.05587, 8.09892, 9.47112, 4.84053, 11.2364, 10.0071]
 }
-
-def update_box_labels(images, boxes, classifier, ** kwargs):
-    img_boxes = []
-    for img, box in zip(images, boxes):
-        img_boxes.extend(crop_box(img, box, ** kwargs))
-    
-    labels = classifier.predict(frame_boxes)
-    
-    label_idx = 0
-    for box in boxes:
-        for b in box:
-            b.label = labels[label_idx]
-            label_idx += 1
 
 class YOLO(BaseImageModel):
     def __init__(self,
@@ -83,21 +76,13 @@ class YOLO(BaseImageModel):
         if self.nb_class > len(self.labels):
             self.labels += [''] * (self.nb_class - len(self.labels))
         
-        self.np_anchors = np.reshape(np.array(anchors), [self.nb_box, 2])
-        
         self.obj_threshold  = obj_threshold
         self.nms_threshold  = nms_threshold
         
+        self.np_anchors = np.reshape(np.array(anchors), [self.nb_box, 2])
+
         super().__init__(** kwargs)
 
-    def _init_folders(self):
-        super()._init_folders()
-        os.makedirs(self.stream_dir, exist_ok = True)
-        os.makedirs(self.pred_img_dir, exist_ok = True)
-        os.makedirs(self.pred_boxes_dir, exist_ok = True)
-        os.makedirs(self.stream_img_dir, exist_ok = True)
-        os.makedirs(self.stream_boxes_dir, exist_ok = True)
-    
     def init_train_config(self, * args, ** kwargs):
         super().init_train_config(* args, ** kwargs)
         
@@ -125,26 +110,11 @@ class YOLO(BaseImageModel):
         return os.path.join(self.folder, "stream")
         
     @property
-    def pred_img_dir(self):
-        return os.path.join(self.pred_dir, "images")
-    
-    @property
-    def pred_boxes_dir(self):
-        return os.path.join(self.pred_dir, "boxes")
-    
-    @property
-    def stream_img_dir(self):
-        return os.path.join(self.stream_dir, "images")
-    
-    @property
-    def stream_boxes_dir(self):
-        return os.path.join(self.stream_dir, "boxes")
-    
-    @property
     def output_signature(self):
         return (
             tf.TensorSpec(
-                shape =(None, self.grid_h, self.grid_w, self.nb_box, 5 + self.nb_class), dtype = tf.float32
+                shape =(None, self.grid_h, self.grid_w, self.nb_box, 5 + self.nb_class),
+                dtype = tf.float32
             ),
             tf.TensorSpec(
                 shape = (None, 1, 1, 1, self.max_box_per_image, 4), dtype = tf.float32
@@ -174,10 +144,10 @@ class YOLO(BaseImageModel):
         des += "Feature extractor : {}\n".format(self.backend)
         return des
     
-    @timer(name = 'inference')
+    @timer(name = 'inference', log_if_root = False)
     def detect(self, image, get_boxes = False, training = False, ** kwargs):
         """
-            Perform prediction on `image` and returns either the model's output either the boxes
+            Performs prediction on `image` and returns either the model's output either the boxes (if `get_boxes = True`)
             
             Arguments :
                 - image : tf.Tensor of rank 3 or 4 (single / batched image(s))
@@ -200,15 +170,76 @@ class YOLO(BaseImageModel):
         
         return [self.decode_output(out, ** kwargs) for out in outputs]
     
-    def compile(self, loss_config = {}, **kwargs):
-        kwargs['loss'] = 'YoloLoss'
-        
+    def compile(self, loss = 'YoloLoss', loss_config = {}, ** kwargs):
         loss_config.update({'anchors' : self.anchors})
         
-        super().compile(loss_config = loss_config, ** kwargs)
+        super().compile(loss = 'YoloLoss', loss_config = loss_config, ** kwargs)
     
-    def get_input(self, filename):
+    @timer(name = 'output decoding')
+    def decode_output(self, output, obj_threshold = None, nms_threshold = None, ** kwargs):
+        if obj_threshold is None: obj_threshold = self.obj_threshold
+        if nms_threshold is None: nms_threshold = self.nms_threshold
+        
+        grid_h, grid_w, nb_box = output.shape[:3]
+        nb_class = output.shape[3] - 5
+
+        # decode the output by the network
+        conf    = tf.sigmoid(output[..., 4:5])
+        classes = tf.nn.softmax(output[..., 5:], axis = -1)
+        
+        scores  = conf * classes
+        scores  = tf.where(scores > obj_threshold, scores, 0.)
+        
+        class_scores = tf.reduce_sum(scores, axis = -1)
+
+        pos     = output[..., :4].numpy()
+        conf    = conf.numpy()[..., 0]
+        classes = classes.numpy()
+
+        candidates  = tf.where(class_scores > 0.).numpy()
+        
+        boxes = []
+        for row, col, b in candidates:
+            # first 4 elements are x, y, w, and h
+            x, y, w, h = pos[row, col, b]
+            
+            x = (col + _sigmoid(x)) / grid_w # center position, unit: image width
+            y = (row + _sigmoid(y)) / grid_h # center position, unit: image height
+            w = self.anchors[2 * b + 0] * np.exp(w) / grid_w # unit: image width
+            h = self.anchors[2 * b + 1] * np.exp(h) / grid_h # unit: image height
+            
+            box = BoundingBox(
+                x1 = max(0., x - w / 2), y1 = max(0., y - h / 2), 
+                x2 = min(1., x + w / 2), y2 = min(1., y + h / 2),
+                conf = conf[row, col, b], classes = classes[row, col, b]
+            )
+            if box.area > 0: boxes.append(box)
+
+        # suppress non-maximal boxes
+        for c in range(nb_class):
+            sorted_indices = list(reversed(np.argsort([box.classes[c] for box in boxes])))
+
+            for i, index_i in enumerate(sorted_indices):
+                if boxes[index_i].classes[c] == 0: continue
+
+                for j in range(i+1, len(sorted_indices)):
+                    index_j = sorted_indices[j]
+
+                    iou = bbox_iou(boxes[index_i], boxes[index_j])
+                    if iou >= nms_threshold:
+                        boxes[index_j].classes[c] = 0
+        # remove the boxes which are less likely than a obj_threshold
+        boxes = [box for box in boxes if box.score > 0]
+        return boxes
+
+    def get_input(self, filename, ** kwargs):
         return self.get_image(filename)
+    
+    def augment_input(self, image, ** kwargs):
+        return self.augment_image(image)
+    
+    def preprocess_input(self, image, ** kwargs):
+        return self.preprocess_image(image)
     
     def get_output_fn(self, boxes, labels, nb_box, image_h, image_w, ** kwargs):
         if hasattr(boxes, 'numpy'): boxes = boxes.numpy()
@@ -217,7 +248,7 @@ class YOLO(BaseImageModel):
         output      = np.zeros((self.grid_h, self.grid_w, self.nb_box, 5 + self.nb_class))
         true_boxes  = np.zeros((1, 1, 1, self.max_box_per_image, 4))
         
-        logging.debug("Image with shape ({}, {}) and {} boxes :".format(image_h, image_w, len(boxes)))
+        logger.debug("Image with shape ({}, {}) and {} boxes :".format(image_h, image_w, len(boxes)))
         
         for i in range(nb_box):
             x, y, w, h = boxes[i]
@@ -232,7 +263,7 @@ class YOLO(BaseImageModel):
             grid_x = int(np.floor(center_x))
             grid_y = int(np.floor(center_y))
             
-            logging.debug("Boxes {} ({}) go to grid ({}, {})".format(i, boxes[i], grid_y, grid_x))
+            logger.debug("Boxes {} ({}) go to grid ({}, {})".format(i, boxes[i], grid_y, grid_x))
             
             if w > 0. and h > 0. and grid_x < self.grid_w and grid_y < self.grid_h:
                 box = np.array([center_x, center_y, w, h])
@@ -252,7 +283,7 @@ class YOLO(BaseImageModel):
                 
                 best_anchor = np.argmax(iou)
                 
-                logging.debug("Normalized box {} with label {} to anchor idx {} with score {}".format(box, label_idx, best_anchor, iou[best_anchor]))
+                logger.debug("Normalized box {} with label {} to anchor idx {} with score {}".format(box, label_idx, best_anchor, iou[best_anchor]))
                 
                 if iou[best_anchor] > 0.:
                     output[grid_y, grid_x, best_anchor, :5] = yolo_box
@@ -272,83 +303,18 @@ class YOLO(BaseImageModel):
         
         return output, true_boxes
     
-    @timer(name = 'output decoding')
-    def decode_output(self, output, obj_threshold = None, nms_threshold = None, ** kwargs):
-        if obj_threshold is None: obj_threshold = self.obj_threshold
-        if nms_threshold is None: nms_threshold = self.nms_threshold
-        
-        grid_h, grid_w, nb_box = output.shape[:3]
-        nb_class = output.shape[3] - 5
-
-        # decode the output by the network
-        conf    = tf.sigmoid(output[..., 4])
-        classes = tf.nn.softmax(output[..., 5:], axis = -1)
-        
-        scores  = tf.expand_dims(conf, axis = -1) * classes
-        scores  = scores * tf.cast(scores > obj_threshold, scores.dtype)
-        
-        class_scores = tf.reduce_sum(scores, axis = -1).numpy()
-        
-        conf    = conf.numpy()
-        output  = output.numpy()
-        classes = classes.numpy()
-
-        boxes = []
-        for row in range(grid_h):
-            for col in range(grid_w):
-                for b in range(nb_box):
-                    if class_scores[row, col, b] > 0.:
-                        # first 4 elements are x, y, w, and h
-                        x, y, w, h = output[row, col, b, :4]
-
-                        x = (col + _sigmoid(x)) / grid_w # center position, unit: image width
-                        y = (row + _sigmoid(y)) / grid_h # center position, unit: image height
-                        w = self.anchors[2 * b + 0] * np.exp(w) / grid_w # unit: image width
-                        h = self.anchors[2 * b + 1] * np.exp(h) / grid_h # unit: image height
-
-                        box = BoundingBox(
-                            x1 = max(0., x - w / 2), y1 = max(0., y - h / 2), 
-                            x2 = min(1., x + w / 2), y2 = min(1., y + h / 2),
-                            conf = conf[row, col, b], classes = classes[row, col, b]
-                        )
-                        if box.area > 0: boxes.append(box)
-
-        # suppress non-maximal boxes
-        for c in range(nb_class):
-            sorted_indices = list(reversed(np.argsort([box.classes[c] for box in boxes])))
-
-            for i, index_i in enumerate(sorted_indices):
-                if boxes[index_i].classes[c] == 0: continue
-
-                for j in range(i+1, len(sorted_indices)):
-                    index_j = sorted_indices[j]
-
-                    iou = bbox_iou(boxes[index_i], boxes[index_j])
-                    if iou >= nms_threshold:
-                        boxes[index_j].classes[c] = 0
-
-        # remove the boxes which are less likely than a obj_threshold
-        boxes = [box for box in boxes if box.score > 0]
-        return boxes
-    
     def encode_data(self, data):
-        image   = self.get_input(data)
-        outputs = self.get_output(data)
-        
-        return image, outputs
+        return self.get_input(data), self.get_output(data)
     
     def augment_data(self, image, output):
-        image = self.augment_image(image)
-
-        return image, output
+        return self.augment_input(image), output
     
     def preprocess_data(self, image, output):
-        image = self.preprocess_image(image)
-
-        return image, output
+        return self.preprocess_input(image), output
     
     @timer(name = 'drawing')
     def draw_prediction(self, image, boxes, labels = None, as_mask = False, ** kwargs):
+        """ Calls `draw_boxes` or `mask_boxes` depending on `as_mask` and returns the result """
         if len(boxes) == 0: return image
         
         if as_mask:
@@ -359,177 +325,84 @@ class YOLO(BaseImageModel):
         kwargs.setdefault('labels', labels if labels is not None else self.labels)
 
         return draw_boxes(image, boxes, ** kwargs)
-             
-    @timer(name = 'saving')
-    def save_prediction(self,
-                        image,
-                        boxes,
-                        labels      = None,
-                        detected    = None,
-                        dezoom_factor   = 1.,
-                        
-                        img_dir     = None,
-                        boxes_dir   = None,
-                        detected_dir    = None,
-                        
-                        filename        = 'image_{}.jpg',
-                        detected_name   = '{}_detected.jpg',
-                        box_name        = '{}_box_{}.jpg',
-                        
-                        save_detected   = True,
-                        save_boxes      = False,
-                        extract_boxes   = False,
-                        
-                        ** kwargs
-                       ):
-        """
-            Save a prediction with many possible options
-            
-            Arguments :
-                - image     : the original image (raw or filename)
-                - boxes     : detected boxes
-                - labels    : custom labels to use
-                - detected  : detected image (image with drawed boxes)
-                - dezoom_factor     : dezoom factor for boxes normalization
-                
-                - img_dir   : where to save original / detected images
-                - detected_dir  : where to save detected image (default to 'img_dir')
-                - boxes_dir : where to save boxes images
-                
-                - filename      : original image filename format
-                - detected_name : detected image filename format
-                - box_name      : box name format
-                
-                - save_image    : whether to save the original image (if `filename` does not exist)
-                - save_detected : whether to save detected image or not
-                - save_boxes    : whether to save boxes' information or not
-                - extract_boxes : whether to save boxes' images or not
-            Return :
-                - infos_pred, infos_boxes   : dict, dict
-                    - infos_pred  : dict {filename : infos} where `infos` is a dict containing general information about the original image such as {filename, width, height, detected, boxes}
-                    
-                    - infos_boxes   : {box_filename : box_infos} where `box_infos` is a dict containing information on the extracted box such as {original, box, label, width, height} and `box_filename` is the filename for this specific box
-        """
-        if not (save_detected or save_boxes or extract_boxes): return {}, {}
-        
-        # Define default variables / directories
-        if labels is None:          labels  = self.labels
-        if img_dir is None:         img_dir = self.pred_img_dir
-        if detected_dir is None:    detected_dir = img_dir
-        if boxes_dir is None:       boxes_dir = self.pred_boxes_dir
-        
-        if isinstance(image, str): filename = image
-        
-        # Normalize boxes
-        image_h, image_w = get_image_size(image)
-        normalized_boxes = [get_box_pos(
-            box, image_h = image_h, image_w = image_w, labels = labels,
-            with_label = True, dezoom_factor = dezoom_factor,
-            normalize_mode = NORMALIZE_WH
-        )[:5] for box in boxes]
-        
-        # Output information
-        infos_pred, infos_boxes = {}, {}
-        # Save frame (if filename does not exists) if required to have the original image
-        if save_boxes:
-            if not os.path.exists(filename):
-                files = os.listdir(img_dir)
-                img_num = max(
-                    len([f for f in files if '_detected' in f]),
-                    len([f for f in files if '_detected' not in f])
-                )
-
-                filename    = os.path.join(img_dir, filename.format(img_num))
-                save_image(filename = filename, image = image)
-            
-            infos_pred.setdefault(filename, {})
-            infos_pred[filename].update({
-                'filename' : filename, 'height' : image_h, 'width' : image_w,
-                'nb_box' : len(normalized_boxes), 'box' : normalized_boxes
-            })
-        # Save detected image
-        if save_detected:
-            # Draw boxes (if required to save detected)
-            if detected is None:
-                detected = self.draw_prediction(image, boxes, labels)
-            # It means the frame hasnot been saved (not save_boxes)
-            if filename not in infos_pred:
-                files = os.listdir(img_dir)
-                img_num = max(
-                    len([f for f in files if '_detected' in f]),
-                    len([f for f in files if '_detected' not in f])
-                )
-
-                filename    = os.path.join(img_dir, filename.format(img_num))
-            # Format detected_name with the `filename` basename
-            detected_name = os.path.join(
-                detected_dir, detected_name.format(os.path.basename(filename)[:-4])
-            )
-            save_image(filename = detected_name, image = detected)
-            # If save_boxes, add infos to `infos_pred`
-            if isinstance(filename, str) and filename in infos_pred:
-                infos_pred[filename]['detected'] = detected_name
-        
-        # Extract boxes images and save them
-        if extract_boxes:
-            image = load_image(image)
-            
-            if os.path.exists(filename):
-                basename = os.path.basename(filename)[:-4]
-            else:
-                no_img_num = len(set([
-                    f.split('_')[2] for f in os.listdir(boxes_dir) 
-                    if f.startswith('no_img_')
-                ]))
-                basename = 'no_img_{}'.format(no_img_num)
-            
-            for i, (x, y, w, h, label) in enumerate(normalized_boxes):
-                box_img = image[y : y + h, x : x + w]
-
-                box_filename = os.path.join(
-                    boxes_dir, box_name.format(basename, i)
-                )
-                save_image(filename = box_filename, image = box_img)
-                
-                infos_boxes[box_filename] = {
-                    'original'  : filename if os.path.exists(filename) else None,
-                    'box'       : [x, y, w, h],
-                    'label'     : label,
-                    'height'    : h,
-                    'width'     : w
-                }
-        
-        return infos_pred, infos_boxes
     
-    def get_pipeline(self,
-                     classifier   = None,
+    def save_image(self, image, directory = None, filename = 'image_{}.jpg', ** kwargs):
+        """ Saves `image` to `directory` (default {self.pred_dir}/images/) """
+        if isinstance(image, str): return image
+        if directory is None: directory = os.path.join(self.pred_dir, 'images')
+        
+        if not filename.startswith(directory): filename = os.path.join(directory, filename)
+        if '{}' in filename:
+            filename = filename.format(len(glob.glob(filename.replace('{}', '*'))))
+        
+        save_image(filename = filename, image = image)
+        
+        return filename
+    
+    def save_detected(self,
+                      detected  = None,
+                      image = None,
+                      boxes = None,
+                      dezoom_factor = 1.,
+                      
+                      directory = None,
+                      filename  = '{}_detected.jpg',
+                      original_filename = None,
+                      
+                      ** kwargs
+                     ):
+        if detected is None:
+            assert boxes is not None and image is not None
+            
+            image_h, image_w = get_image_size(image)
+            normalized_boxes = [get_box_pos(
+                box, image_h = image_h, image_w = image_w, labels = labels,
+                with_label = True, dezoom_factor = dezoom_factor,
+                normalize_mode = NORMALIZE_WH
+            )[:5] for box in boxes]
+            
+            kwargs.setdefault('labels', self.labels)
+            detected = self.draw_prediction(image, boxes, ** kwargs)
 
-                     save         = False,
-                     save_empty   = False,
-                     save_boxes   = False,
-                     save_detected    = False,
+        if directory is None: directory = os.path.join(directory, 'detected')
+        if not filename.startswith(directory): filename = os.path.join(directory, filename)
+        
+        if '{}' in filename:
+            if isinstance(original_filename, str):
+                img_name    = os.path.splitext(os.path.basename(original_filename))[0]
+            else:
+                img_name    = 'image_{}'.format(len(glob.glob(filename.replace('{}', '*'))))
+            
+            filename = filename.format(img_name)
+        
+        save_image(filename = filename, image = detected)
+        
+        return filename
+
+    def get_pipeline(self,
+                     batch_size = 8,
+                     
+                     post_processing    = None,
+                     drawing_consumers  = None,
+
+                     save   = False,
+                     save_empty = False,
+                     save_boxes = False,
+                     save_detected  = False,
+                     track_items    = None,
 
                      directory    = None,
                      map_directory    = None,
-                     default_filename_format    = 'image_{}.jpg',
-
-                     batch_size   = 1,
+                     
+                     image_format   = 'image_{}.jpg',
+                     detected_format    = '{}_detected.jpg',
+                     box_format     = '{}_box_{}.jpg',
                      ** kwargs
                     ):
         """
-            Get the inference pipeline with drawing and saving as a list of dict (valid `utils.thread_utils.Pipeline` argument)
-            
-            Pipeline :
-            name        input                       output
-            -----------|---------------------------|------------------------------------
-            _detect     frame                       (frame, output)
-            _decode     (frame, output)             (frame, boxes)
-            _draw       (frame, boxes)              (frame, boxes, detected)
-                _save   (frame, boxes, detected)    (image_infos, extracted_boxes_infos)
+            Get the inference pipeline with drawing and saving
             
             Arguments :
-                - classifier    : classifier to re-label boxes (not fully supported yet)
-                
                 - save          : whether to save frames with boxes' mapping
                 - save_empty    : whether to save information about frames with 0 box
                 - save_boxes    : whether to save each detected box as an image
@@ -558,140 +431,199 @@ class YOLO(BaseImageModel):
                     map_boxes.json      // map boxes' image to its information
         """
         @timer
-        def _detect(frame):
+        def preprocess(filename, ** kwargs):
+            """ Loads and process the image """
+            file_id = None
+            if isinstance(filename, dict):
+                file_id = filename.get('filename', filename.get('id', filename.get('image', None)))
+            
+            image   = load_image(filename)
+            processed   = self.preprocess_input(self.get_input(image))
+            
+            image_h, image_w = image.shape[:2]
+            return {
+                'filename'  : filename if file_id is None else file_id,
+                'image'     : image.numpy(),
+                'processed' : processed,
+                'height'    : image_h,
+                'width'     : image_w
+            }
+        
+        def detect(infos, ** kwargs):
             """ Takes a frame and returns its model's output """
-            outputs = self.detect(self.get_input(frame))
-            
-            if isinstance(frame, list):
-                return [(f, out) for f, out in zip(frame, outputs)]
-            return (frame, outputs[0])
+            if not isinstance(infos, list):
+                infos['output'] = self.detect(infos.pop('processed'))[0]
+            else:
+                outputs = self.detect(tf.stack([info.pop('processed') for info in infos]))
+                for info, out in zip(infos, outputs): info['output'] = out
+            return infos
         
-        @timer
-        def _decode_with_update(f_out):
+        def decode(infos, ** kwargs):
             """ Decode a model's output and returns corresponding boxes """
-            frame, output = f_out
-            boxes = self.decode_output(output, ** kwargs)
-            
-            if classifier is not None:
-                update_box_labels(frame, boxes, classifier = classifier, ** kwargs)
-            
-            return (frame, boxes)
+            kwargs.setdefault('labels', self.labels)
+            boxes = self.decode_output(infos.pop('output'), ** kwargs)
+            infos.update({'nb_box' : len(boxes), 'box' : boxes})
+            return infos
         
-        def _save(f_draw):
-            """ Save the output (if required) """
-            frame, boxes, detected  = f_draw
-            if len(boxes) == 0 and not save_empty: return {}, {}
-            
-            infos_i, infos_boxes_i = self.save_prediction(
-                image   = frame,
-                boxes   = boxes,
-                detected    = detected,
-                
-                filename    = default_filename_format,
-                img_dir     = img_dir,
-                boxes_dir   = boxes_dir,
-                detected_dir    = detected_dir,
-                
-                map_file    = map_file,
-                map_box_file    = map_box_file,
-                
-                save_boxes  = save,
-                save_detected   = save_detected,
-                extract_boxes   = save_boxes,
-                ** kwargs
-            )
-            infos_pred.update(infos_i)
-            infos_boxes.update(infos_boxes_i)
-            
-            return infos_i, infos_boxes_i
+        def draw(infos, ** kw):
+            """ Draw prediction """
+            infos['detected_image']   = self.draw_prediction(
+                infos['image'].copy(), infos['box'], ** {** kwargs, ** kw}
+            ) if infos['nb_box'] > 0 else infos['image']
+            return infos
         
         @timer
-        def _init_dir(subdir, map_filename, should_save):
-            if not should_save: return None, None, {}
-
-            dir_name    = os.path.join(directory, subdir)
-            map_file    = os.path.join(map_directory, map_filename) if map_filename else None
+        def save_image(infos, ** kw):
+            if not isinstance(infos['filename'], str):
+                infos['filename'] = self.save_image(
+                    image       = infos['filename'],
+                    directory   = img_dir,
+                    filename    = image_format
+                ) if infos['nb_box'] > 0 or save_empty else None
+            elif not os.path.exists(infos['filename']):
+                infos['filename'] = self.save_image(
+                    image       = infos['image'],
+                    directory   = img_dir,
+                    filename    = infos['filename']
+                ) if infos['nb_box'] > 0 or save_empty else None
             
-            os.makedirs(dir_name, exist_ok = True)
-            infos   = load_json(map_file, default = {}) if map_file else {}
+            return infos
+        
+        @timer
+        def save_detected_fn(infos, ** kw):
+            infos['detected'] = self.save_detected(
+                detected    = infos['detected_image'],
+                image   = infos['image'],
+                boxes   = infos['box'],
+                directory   = detected_dir,
+                filename    = detected_format,
+                original_filename   = infos['filename'],
+                ** {** kwargs, ** kw}
+            ) if save_empty or infos['nb_box'] > 0 else None
+            return infos
+        
+        @timer
+        def save_boxes_fn(infos, ** kw):
+            if not isinstance(infos['filename'], str) and infos['nb_box'] > 0:
+                raise RuntimeError('`filename` must be a string when `save_boxes = True` otherwise the result will not be saved. It can occur when you pass a raw image in the pipeline and `save = False`. In this case, pass a dict {id:, image:} as input (the image will not be saved and `id` will be used to save boxes\' information in `map.json`).')
             
-            return map_file, dir_name, infos
+            infos['extracted'] = extract_boxes(
+                filename    = infos['filename'],
+                image   = infos['image'],
+                boxes   = infos['box'],
+                directory   = boxes_dir,
+                file_format = box_format,
+                ** {** kwargs, ** kw}
+            ) if infos['nb_box'] > 0 else {}
+            
+            return infos
         
         if directory is None:   directory = self.pred_dir
         if map_directory is None:   map_directory = directory
+        map_file = os.path.join(map_directory, 'map.json') if save or save_boxes else None
+
+        expected_keys       = ['nb_box', 'box']
+        do_not_save_keys    = ['image', 'processed', 'output', 'detected_image']
+        if not save_detected: do_not_save_keys.append('detected')
         
-        map_file,     img_dir,   infos_pred     = _init_dir('images',   'map.json', save)
-        _,            detected_dir, _           = _init_dir('detected', None, save_detected)
-        map_box_file, boxes_dir, infos_boxes    = _init_dir('boxes',    'map_boxes.json', save_boxes)
+        final_functions = []
+        if post_processing is not None:
+            final_functions.append(post_processing)
         
-        infos_pred  = ThreadedDict(** infos_pred)
-        infos_boxes = ThreadedDict(** infos_boxes)
+        final_functions.append({'consumer' : draw, 'consumers' : drawing_consumers})
         
-        return [
-            {
-                'consumer'  : _detect,
-                'batch_size'    : batch_size,
-                'max_workers'   : min(1, kwargs.get('max_workers', 0)),
-                'name'      : 'detection'
-            },
-            {
-                'consumer'  : _decode_with_update,
-                'name'      : 'decoding'
-            },
-            {
-                'consumer'  : lambda f_box: (
-                    (f_box[0], f_box[1], self.draw_prediction(f_box[0], f_box[1], ** kwargs))
-                ),
-                'name'      : 'drawing',
-                'consumers' : {
-                    'consumer'  : _save,
-                    'max_workers'   : min(kwargs.get('max_workers', 0), 0),
-                    'name'      : 'saving',
-                    'stop_listeners'    : [
-                        lambda: dump_json(map_file, infos_pred, indent = 4) if save else None,
-                        lambda: dump_json(map_box_file, infos_boxes, indent = 4) if save_boxes else None
-                    ]
-                }
-            }
-        ], infos_pred, infos_boxes
+        if save:
+            img_dir     = os.path.join(directory, 'images')
+            os.makedirs(img_dir, exist_ok = True)
+            
+            expected_keys.append('filename')
+            final_functions.append({'consumer' : save_image, 'allow_multithread' : False})
+        else:
+            do_not_save_keys.append('filename')
+
+        if save_detected:
+            detected_dir    = os.path.join(directory, 'detected')
+            os.makedirs(detected_dir, exist_ok = True)
+            
+            expected_keys.append('detected')
+            final_functions.append({'consumer' : save_detected_fn, 'allow_multithread' : False})
+        
+        if save_boxes:
+            boxes_dir   = os.path.join(directory, 'boxes')
+            os.makedirs(boxes_dir, exist_ok = True)
+
+            expected_keys.append('extracted')
+            final_functions.append({'consumer' : save_boxes_fn, 'allow_multithread' : False})
+        
+        pipeline = Pipeline(** {
+            ** kwargs,
+            'name'  : 'detection_pipeline',
+            'filename'  : map_file,
+            'track_items'   : track_items,
+            'expected_keys' : expected_keys,
+            'do_not_save_keys'  : do_not_save_keys,
+            
+            'tasks' : [
+                preprocess,
+                {
+                    'consumer'  : detect,
+                    'batch_size'    : batch_size,
+                    'allow_multithread' : False,
+                    'name'      : 'detection'
+                },
+                {'consumer' : decode, 'name' : 'decoding'},
+            ] + final_functions
+        })
+        pipeline.start()
+        
+        return pipeline
 
     @timer
-    def stream(self, batch_size = 8, stream_name = 'stream_{}', ** kwargs):
+    def stream(self, stream_name = 'stream_{}', save = False, save_boxes = False, ** kwargs):
         """
-            Performs streaming either on camera (default) or on filename (by specifying the `cam_id` kwarg
-        )"""
+            Performs streaming either on camera (default) or on filename (by specifying the `cam_id` kwarg)
+        """
+        kwargs.update({'save' : save, 'save_boxes' : save_boxes, 'track_items' : False})
         if stream_name:
             directory = kwargs.get('directory', self.stream_dir)
+            if '{}' in stream_name:
+                stream_name = stream_name.format(len(
+                    glob.glob(os.path.join(directory, stream_name.replace('{}', '*')))
+                ))
             kwargs.update({
-                'directory' : os.path.join(directory, stream_name.format(
-                    len(sub for sub in os.listdir(directory) if sub.startswith('stream_'))
-                )),
+                'directory' : os.path.join(directory, stream_name),
                 'map_directory' : directory
             })
         else:
             kwargs.setdefault('directory', self.stream_dir)
         
-        kwargs['transform_fn'] = self.get_pipeline(batch_size = batch_size, ** kwargs)[0]
-        kwargs['transform_fn'].append({
-            'consumer' : lambda f_draw: f_draw[-1], 'max_workers' : -1, 'name' : 'identity'
-        })
+        pipeline    = self.get_pipeline(** kwargs)
+        drawing_consumer    = pipeline.get_consumer('draw')
+        detected_producer   = drawing_consumer.add_consumer(
+            lambda infos, ** kwargs: infos['detected_image'], max_workers = -2, name = 'identity'
+        )
+        kwargs.update({'transform_fn' : pipeline, 'transformer_prod' : detected_producer})
         
+        if save or save_boxes:
+            kwargs['id_format'] = os.path.join(
+                kwargs['directory'], 'images', kwargs.get('image_format', 'frame_{}.jpg')
+            )
+
         return stream_camera(** kwargs)
     
     @timer
-    def predict(self, images, batch_size = 16, show = True, save = True, overwrite = False,
-                verbose = 1, tqdm = lambda x: x, plot_kwargs = {}, ** kwargs):
+    def predict(self, images, display = True, save = True, verbose = 1,
+                plot_kwargs = {}, ** kwargs):
         """
             Perform prediction on `images` and compute some time statistics
             
             Arguments :
                 - images : (list of) images (either path / raw image) to detect objects on
                 
-                - show  : number of images to show (-1 or True to show all images)
+                - display   : number of images to display (-1 or True to display all images)
                 - save  : whether to save result or not
                 - overwrite     : whether to overwrite (or not) already predicted image
                 
-                - tqdm      : progress bar (put to False if show > 0 or verbose)
                 - verbose   : verbosity level (0, 1, 2 or 3)
                     - 0 : silent
                     - 1 : plot detected image
@@ -716,67 +648,48 @@ class YOLO(BaseImageModel):
             i.e. put `save` to False will not overwrite.
         """
         @timer
-        def _display(f_draw, img_num = 0):
-            image, box, detected = f_draw
-            image   = load_image(image)
-            
-            if verbose and img_num < show:
+        def show_result(infos, img_num = 0, ** kwargs):
+            image, box, detected = infos['image'], infos['box'], infos['detected_image']
+            if verbose and img_num < display:
                 # Show individual boxes
                 if verbose > 1:
                     if verbose == 3:
-                        logging.info("{} boxes found :\n{}".format(
+                        logger.info("{} boxes found :\n{}".format(
                             len(box), '\n'.join(str(b) for b in box)
                         ))
 
                     show_boxes(image, box, labels = kwargs.get('labels', self.labels), ** plot_kwargs)
                 # Show original image with drawed boxes
                 plot(detected, title = '{} object(s) detected'.format(len(box)), ** plot_kwargs)
-            return f_draw, (img_num + 1, )
+            return infos, (img_num + 1, )
         
         images = normalize_filename(images)
         if not isinstance(images, (list, tuple)): images = [images]
-        if not save or show in (True, -1): show = len(images)
-        if show > 0: tqdm = lambda x: x
+        if not save or display in (True, -1): display = len(images)
         
         kwargs.setdefault('directory', self.pred_dir)
         
-        # Get 1 time eachimage to not detect multiple times (as prediction is deterministic)
-        requested_images = images
-        images = list(set(images))
-        
-        pipeline, infos_pred, _ = self.get_pipeline(
-            batch_size = batch_size, save = save, ** kwargs
-        )
-        
         videos = [img for img in images if isinstance(img, str) and img.endswith(_video_formats)]
         images = [
-            img for img in images if not isinstance(img, str) or (
-                img.endswith(_image_formats) and (overwrite or img not in infos_pred)
-            )
+            img for img in images if not isinstance(img, str) or img.endswith(_image_formats)
         ]
-        # Predict on videos (if any)
+        
+        results, video_results = [], []
+        # Predicts on videos (if any)
         if len(videos) > 0:
-            videos_infos = self.predict_video(
-                videos, batch_size = batch_size, overwrite = overwrite,
-                tqdm = tqdm, show = show, ** kwargs
-            )
-            # Update information on video prediction
-            for video, infos in videos_infos:
-                infos_pred[video] = infos
+            video_results = self.predict_video(videos, ** kwargs)
         
         if len(images) > 0:
-            prod    = Producer(images, run_main_thread = kwargs.get('max_workers', 0) < 0)
-            pipe    = prod.add_consumer(pipeline, ** kwargs)
+            show_cons = {
+                'consumer' : show_result, 'max_workers' : -2, 'batch_size' : 1, 'stateful' : True
+            }
+            pipeline = self.get_pipeline(
+                save = save, drawing_consumers = show_cons if verbose else None, ** kwargs
+            )
+            
+            results = pipeline.extend_and_wait(images, stop = True, ** kwargs)
 
-            if verbose:
-                pipe.add_consumer(_display, stateful = True, start = True, link_stop = True)
-
-            prod.start()
-            prod.join(recursive = True)
-        
-        return [
-            (img, infos_pred.get(img, {})) for img in requested_images if isinstance(img, str)
-        ]
+        return video_results + [(img, res) for img, res in zip(images, results)]
 
     def evaluate(self, 
                  generator, 
@@ -898,6 +811,7 @@ class YOLO(BaseImageModel):
                       videos,
                       
                       save_frames   = False,
+                      save_detected = False,
                       save_boxes    = False,
                       save_video    = True,
                       directory     = None,
@@ -942,22 +856,15 @@ class YOLO(BaseImageModel):
         # get saving directory
         if directory is None: directory = self.pred_dir
         
-        map_frames_file = os.path.join(directory, 'map.json') if save_frames or save_boxes else None
-        
         map_file    = os.path.join(directory, 'map_videos.json')
         infos_videos    = load_json(map_file, default = {})
         
-        video_dir = None
-        if save_video:
-            video_dir   = os.path.join(directory, 'videos')
-            os.makedirs(video_dir, exist_ok = True)
+        video_dir = os.path.join(directory, 'videos')
         
-        # Get 1 time eachimage to not detect multiple times (as prediction is deterministic)
-        requested_videos = [video for video in videos if video.endswith(_video_formats)]
-        videos = list(set(requested_videos))
+        # Filters files that do not end with a valid video extension
+        videos = [video for video in videos if video.endswith(_video_formats)]
         
-        # for each batch
-        for path in tqdm(videos):
+        for path in tqdm(set(videos)):
             video_name, ext  = os.path.splitext(os.path.basename(path))
             # Maybe skip because already predicted
             if not overwrite and path in infos_videos:
@@ -965,30 +872,39 @@ class YOLO(BaseImageModel):
                     if not save_video or (save_video and infos_videos[path]['detected'] is not None):
                         continue
             
+            save_dir    = os.path.join(video_dir, video_name)
             out_file = None if not save_video else os.path.join(
-                video_dir, '{}_detected{}'.format(video_name, ext)
+                save_dir, '{}_detected{}'.format(video_name, ext)
             )
+            map_frames = os.path.join(save_dir, 'map.json') if save_frames or save_boxes else None
+            
+            if os.path.exists(save_dir): shutil.rmtree(save_dir)
+            if out_file and os.path.exists(out_file): os.remove(out_file)
+            if out_file: os.makedirs(save_dir, exist_ok = True)
+            
             self.stream(
                 cam_id  = path,
                 save    = save_frames,
+                save_detected   = save_detected,
                 save_boxes  = save_boxes,
                 overwrite   = overwrite,
                 stream_name = None,
-                directory   = os.path.join(directory, 'images', video_name),
-                map_directory   = directory,
+                
+                directory   = save_dir,
                 output_file = out_file,
+                
                 ** kwargs
             )
             
             infos_videos[path] = {
                 'detected'  : out_file,
-                'frames'    : map_frames_file,
+                'frames'    : map_frames,
                 ** get_video_infos(path).__dict__
             }
         
             dump_json(map_file, infos_videos, indent = 4)
         
-        return [(video, infos_videos[video]) for video in requested_videos]
+        return [(video, infos_videos[video]) for video in videos]
                                 
     def get_config(self, * args, ** kwargs):
         config = super().get_config(* args, ** kwargs)
@@ -1011,6 +927,9 @@ class YOLO(BaseImageModel):
                                 labels  = COCO_CONFIG['labels'],
                                 ** kwargs
                                ):
+        if not os.path.exists(weight_path) and weight_path.endswith('yolov2.weights'):
+            weight_path = download_file(PRETRAINED_COCO_URL, filename = weight_path)
+            
         instance = cls(
             nom = nom, labels = labels, max_to_keep = 1, pretrained_name = weight_path, ** kwargs
         )
