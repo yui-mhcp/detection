@@ -22,6 +22,10 @@ logger = logging.getLogger(__name__)
 FULL_YOLO_BACKEND_PATH  = "pretrained_models/yolo_backend/full_yolo_backend.h5"
 TINY_YOLO_BACKEND_PATH  = "pretrained_models/yolo_backend/tiny_yolo_backend.h5"
 
+def space_to_depth_x2(x):
+    import tensorflow as tf
+    return tf.nn.space_to_depth(x, block_size = 2)
+
 def FullYoloBackend(input_shape,
                     weight_path = FULL_YOLO_BACKEND_PATH,
                    
@@ -29,9 +33,6 @@ def FullYoloBackend(input_shape,
                     ** kwargs
                    ):
     # the function to implement the orgnization layer (thanks to github.com/allanzelener/YAD2K)
-    def space_to_depth_x2(x):
-        import tensorflow as tf
-        return tf.nn.space_to_depth(x, block_size = 2)
     
     input_image = input_shape
     if isinstance(input_shape, int): input_shape = (input_shape, input_shape, 3)
