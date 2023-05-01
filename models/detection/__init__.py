@@ -10,17 +10,35 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import logging
+
 from models.detection.yolo import YOLO
+from models.detection.east import EAST
+from models.model_utils import get_models, get_model_config, is_model_name
+
+logger = logging.getLogger(__name__)
 
 def get_model(label = None, model = None, ** kwargs):
+    from models import get_pretrained
+    
     assert label is not None or model is not None
-    if model is not None:
-        return YOLO(nom = model) if isinstance(model, str) else model
-    elif label is not None:
-        if label not in _pretrained:
-            raise ValueError("No pretrained model for this object type !!\n  Supported : {}\n   Got : {}".format(list(_pretrained.keys()), label))
-        
-        return YOLO(nom = _pretrained[label])
+    
+    if model is None:
+        if label in _pretrained:
+            model = _pretrained[label]
+        else:
+            logger.info('No default model for label {}, searching for a model with this label...'.format(label))
+            for name in get_models(model_class = 'YOLO'):
+                if label in get_model_config(name).get('labels', []):
+                    model = name
+                    break
+    
+    if model is None:
+        raise ValueError('No model found for label {}'.format(model, label))
+    elif isinstance(model, str) and not is_model_name(model):
+        raise ValueError('Model {} does not exist !'.format(model))
+    
+    return get_pretrained(model) if isinstance(model, str) else model
     
 
 def stream(label = None, model = None, ** kwargs):
@@ -32,7 +50,8 @@ def detect(images, label = None, model = None, ** kwargs):
     return model.predict(images, ** kwargs)
 
 _models = {
-    'YOLO'    : YOLO
+    'EAST'  : EAST,
+    'YOLO'  : YOLO
 }
 
 _pretrained = {
