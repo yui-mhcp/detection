@@ -256,7 +256,8 @@ class BaseDetector(BaseImageModel):
             kwargs.setdefault('directory', self.stream_dir)
         
         # for tensorflow-graph compilation (the 1st call is much slower than the next ones)
-        self.detect(tf.random.uniform(self.input_size))
+        input_size = [s if s is not None else 128 for s in self.input_size]
+        self.detect(tf.random.uniform(input_size))
 
         saving_functions    = self._get_saving_functions(
             max_workers = max_workers, show_result_fn = None, save_json_fn = None
@@ -317,7 +318,7 @@ class BaseDetector(BaseImageModel):
                 boxes_filename  = '{}_box_{}.jpg',
                 # Verbosity config
                 verbose = 1,
-                display = False,
+                display = None,
                 plot_kwargs = {},
                 
                 post_processing = None,
@@ -463,8 +464,9 @@ class BaseDetector(BaseImageModel):
             images = np.expand_dims(images, axis = 0)
 
         if save_detected or save_boxes: save = True
-        if (not save and post_processing is None) or display in (-1, True): display = len(images)
-        if display: verbose = max(verbose, 1)
+        if display is None:         display = True if not save else False
+        if display in (-1, True):   display = len(images)
+        if display:                 verbose = max(verbose, 1)
         
         if directory is None: directory = self.pred_dir
         map_file    = os.path.join(directory, 'map.json')
@@ -780,6 +782,8 @@ class BaseDetector(BaseImageModel):
                  score_threshold=0.3,
                  max_detections=100,
                  save_path=None):
+        if True:
+            raise NotImplementedError('This method is deprecated and has to be updated to be used !')
         """ Evaluate a given dataset using a given model.
         code originally from https://github.com/fizyr/keras-retinanet
 

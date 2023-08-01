@@ -1,6 +1,6 @@
 # :yum: Object detection
 
-**NEW : [CHANGELOG](https://github.com/yui-mhcp/yui-mhcp/blob/main/CHANGELOG.md) file ! Check it to have a global overview of the latest modifications !** :yum:
+Check the [CHANGELOG](https://github.com/yui-mhcp/yui-mhcp/blob/main/CHANGELOG.md) file to have a global overview of the latest modifications ! :yum:
 
 **WARNING** : the EAST training procedure is not implemented yet for the current post-processing pipeline inspired from [this repo](https://github.com/SakuraRiven/EAST). It can still be used by using the available pretrained weights !
 
@@ -93,7 +93,8 @@ The pretrained version of EAST can be downloaded [from this project](https://git
 - [ ] Add support for `YOLOv3` and `YOLOv4` models
 - [x] Add segmentation models (such as `U-Net`)
 - [x] Add `producer-consumer` based prediction / streaming
-- [x] Automatically downloads the official pretrained weights if not loaded
+- [x] Automatically downloads the official YOLOv2 pretrained weights (if not loaded)
+- [x] Add the Locality-Aware Non Maximum Suppression (NMS) method as described in the `EAST` paper
 
 ## Difference between `detection` and `segmentation`
 

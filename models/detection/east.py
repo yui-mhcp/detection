@@ -13,7 +13,7 @@
 import numpy as np
 import tensorflow as tf
 
-from utils.image.geo_utils import *
+from utils.image.box_utils.geo_utils import *
 from models.detection.base_detector import BaseDetector
 
 class EAST(BaseDetector):
@@ -64,9 +64,10 @@ class EAST(BaseDetector):
     def compile(self, loss = 'EASTLoss', ** kwargs):
         super().compile(loss = loss, ** kwargs)
 
-    def decode_output(self, model_output, normalize = True, ** kwargs):
+    def decode_output(self, model_output, nms_method = 'lanms', normalize = True, ** kwargs):
         kwargs.setdefault('threshold',      self.obj_threshold)
         kwargs.setdefault('nms_threshold',  self.nms_threshold)
+        kwargs.setdefault('method',         nms_method)
         
         score_map, geo_map, theta_map = [out.numpy() for out in model_output[:3]]
         

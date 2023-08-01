@@ -18,6 +18,7 @@ import tensorflow as tf
 from loggers import timer
 from utils import download_file
 from utils.image.box_utils import *
+from utils.distance.distance_method import iou
 from custom_architectures import get_architecture
 from models.detection.base_detector import BaseDetector
 
@@ -115,19 +116,25 @@ class YOLO(BaseDetector):
     @timer(name = 'output decoding')
     def decode_output(self, output, obj_threshold = None, nms_threshold = None, ** kwargs):
         if len(output.shape) == 5:
-            return [self.decode_output(out) for out in output]
+            return [self.decode_output(
+                out, obj_threshold = obj_threshold, nms_threshold = nms_threshold, ** kwargs
+            ) for out in output]
         
         if obj_threshold is None: obj_threshold = self.obj_threshold
         if nms_threshold is None: nms_threshold = self.nms_threshold
+        time_logger.start_timer('init')
         
         grid_h, grid_w, nb_box = output.shape[:3]
         nb_class = output.shape[3] - 5
-        time_logger.start_timer('preprocess')
-
-        # decode the output by the network
+        
         pos     = output[..., :4].numpy()
         conf    = tf.sigmoid(output[..., 4:5]).numpy()
         classes = tf.nn.softmax(output[..., 5:], axis = -1).numpy()
+
+        time_logger.stop_timer('init')
+        time_logger.start_timer('preprocess')
+
+        # decode the output by the network
         
         scores  = conf * classes
         scores[scores <= obj_threshold] = 0.
@@ -184,7 +191,9 @@ class YOLO(BaseDetector):
                     if boxes[index_j].classes[c] == 0: continue
 
                     if (index_i, index_j) not in ious:
-                        ious[(index_i, index_j)] = bbox_iou(boxes[index_i], boxes[index_j])
+                        ious[(index_i, index_j)] = iou(
+                            boxes[index_i], boxes[index_j], box_mode = BoxFormat.OBJECT
+                        )
                     
                     if ious[(index_i, index_j)] >= nms_threshold:
                         boxes[index_j].classes[c] = 0
