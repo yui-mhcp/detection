@@ -72,11 +72,10 @@ class DiceLoss(tf.keras.losses.Loss):
         return 1. - dice, dice
     
     def get_config(self):
-        config = super().get_config()
-        config.update({
-            'smoothing' : self.smoothing
-        })
-        return config
+        return {
+            ** super().get_config(),
+            'smoothing' : float(self.smoothing.numpy())
+        }
     
 class SparseDiceLoss(DiceLoss):
     def call(self, y_true, y_pred):
