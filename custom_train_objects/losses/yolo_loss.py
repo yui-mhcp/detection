@@ -1,6 +1,5 @@
-
-# Copyright (C) 2022 yui-mhcp project's author. All rights reserved.
-# Licenced under the Affero GPL v3 Licence (the "Licence").
+# Copyright (C) 2022-now yui-mhcp project author. All rights reserved.
+# Licenced under a modified Affero GPL v3 Licence (the "Licence").
 # you may not use this file except in compliance with the License.
 # See the "LICENCE" file at the root of the directory for the licence information.
 #
@@ -10,220 +9,174 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import numpy as np
-import tensorflow as tf
+import keras
+import keras.ops as K
 
-class YoloLoss(tf.keras.losses.Loss):
+from .loss_with_multiple_outputs import LossWithMultipleOutputs
+
+@keras.saving.register_keras_serializable('yolo')
+class YoloLoss(LossWithMultipleOutputs):
     def __init__(self,
-                 anchors,
-                 
                  coord_scale        = 1.0,
                  object_scale       = 5.0,
                  no_object_scale    = 1.0,
                  class_scale        = 1.0,
                  
-                 warmup_epochs  = 3,
+                 anchors    = None,
+                 warmup_epochs  = None,
                  
-                 reduction  = 'none',
-                 **kwargs
+                 ** kwargs
                 ):
-        super().__init__(reduction = 'none', **kwargs)
+        super().__init__(** kwargs)
         
-        assert len(anchors) % 2 == 0
-        
-        self.anchors    = tf.reshape(
-            tf.cast(anchors, tf.float32), [1, 1, 1, len(anchors) // 2, 2]
-        )
-        
-        self.object_scale    = tf.cast(object_scale,    tf.float32)
-        self.no_object_scale = tf.cast(no_object_scale, tf.float32)
-        self.coord_scale     = tf.cast(coord_scale,     tf.float32)
-        self.class_scale     = tf.cast(class_scale,     tf.float32)
-        
-        self.seen   = 0
-        self.warmup_epochs  = tf.cast(warmup_epochs,   tf.int32)
+        self.object_scale   = float(object_scale)
+        self.no_object_scale    = float(no_object_scale)
+        self.coord_scale    = float(coord_scale)
+        self.class_scale    = float(class_scale)
     
     @property
-    def loss_names(self):
+    def output_names(self):
         return ['loss', 'loss_xy', 'loss_wh', 'loss_conf', 'loss_class']
     
-    def compute_loss(self, y_true, y_pred, mask, batch_size, criterion = 'square'):
+    def compute_loss(self, y_true, y_pred, mask, batch_size, nb_box, criterion):
         if criterion == 'mse':
-            error = tf.square(y_true - y_pred)
+            loss = K.square(y_true - y_pred)
         elif criterion == 'categorical':
-            error = tf.keras.losses.categorical_crossentropy(y_true, y_pred)
+            loss = keras.losses.categorical_crossentropy(y_true, y_pred, from_logits = True)
         elif criterion == 'binary':
-            error = tf.keras.losses.binary_crossentropy(y_true, y_pred)
+            loss = keras.losses.binary_crossentropy(y_true, y_pred, from_logits = True)
         else:
-            error = tf.abs(y_true - y_pred)
+            raise ValueError('Unknown loss : {}'.format(criterion))
         
-        nb_box  = tf.reduce_sum(tf.cast(
-            tf.reshape(mask, [batch_size, -1]) > 0.0, tf.float32
-        ), axis = -1) + 1e-6
+        return K.divide_no_nan(
+            K.sum(K.reshape(loss, [batch_size, -1]) * mask, axis = 1),
+            nb_box
+        )
+    
+    def average_loss(self, loss, mask, nb_box):
+        return K.divide_no_nan(
+            K.sum(K.reshape(loss, [K.shape(mask)[0], -1]) * mask, axis = 1), nb_box
+        )
+    
+    def compute_loss_xy(self, true_xy, pred_xy, mask, nb_box):
+        loss = K.mean(K.square(true_xy - pred_xy), axis = -1)
+        return self.average_loss(loss, mask, nb_box) * self.coord_scale
+    
+    def compute_loss_wh(self, true_wh, pred_wh, mask, nb_box):
+        loss = K.mean(K.square(K.sqrt(true_wh) - K.sqrt(pred_wh)), axis = -1)
+        return self.average_loss(loss, mask, nb_box) * self.coord_scale
+
+    def compute_loss_class(self, true_class, pred_class, mask, nb_box):
+        loss = keras.losses.sparse_categorical_crossentropy(
+            true_class, pred_class, from_logits = False
+        )
+        return self.average_loss(loss, mask, nb_box) * self.class_scale
+    
+    def compute_loss_conf(self, y_true, true_boxes, pred_xy, pred_wh, pred_iou, mask, nb_box):
+        batch_size = K.shape(mask)[0]
+        # true_boxes.shape == [batch_size, nb_true_objects, 4]
+        # reshape pred_{xy / wh} to [batch_size, grid_h * grid_w * nb_box, 4] == mask.shape
+        pred_xy = K.reshape(pred_xy, [batch_size, -1, 2])
+        pred_wh = K.reshape(pred_wh, [batch_size, -1, 2])
+        pred_iou    = K.reshape(pred_iou, [batch_size, -1])
         
-        return tf.reduce_sum(tf.reshape(error * mask, [batch_size, -1]), axis = -1) / nb_box
+        # we first compute the true IoU between the boxes and the predicted boxes
+        # this will be used as target in the loss computation
+        true_xywh   = K.reshape(y_true[..., :4], [batch_size, -1, 4])
+        
+        true_ious = compute_iou(
+            true_xywh[..., :2], true_xywh[..., 2:], pred_xy, pred_wh
+        ) * mask
+        
+        # the secon step is to compute the confidence mask for both objects and no-objects
+        # the object mask is equal to `mask` (i.e., where `y_true[..., 4] == 1`)
+        # the no-object mask requires to compute the best IoU between the predicted boxes and all possible boxes (i.e., `true_boxes`)
+        pred_xy     = pred_xy[:, :, None, :]
+        pred_wh     = pred_wh[:, :, None, :]
+        true_boxes  = true_boxes[:, None, :, :]
+        
+        # the computed IoU has shape [batch_size, grid_h * grid_w * nb_box, nb_true_objects]
+        best_ious   = K.max(compute_iou(
+            true_boxes[:, :, :, :2], true_boxes[:, :, :, 2:], pred_xy, pred_wh
+        ), axis = -1)
+        # the no_object_mask is equal to 1 at each position where `mask == 0`
+        # and the IoU of the predicted box is lower than 0.6
+        # if the predicted box has an IoU greater than 0.6, we do not consider this prediction
+        # in the no-object loss (even though no object was expected at this position)
+        no_object_mask  = (1. - mask) * K.cast(true_ious < 0.6, mask.dtype)
+        
+        conf_mask = no_object_mask * self.no_object_scale + mask * self.object_scale
+        
+        # we can now compute the final loss as the square of
+        # the predicted IoU (i.e., `y_pred[..., 4]`) minus the actual IoU
+        # note that `true_ious` equals 0 where `mask = 0`
+        # i.e., the expected IoU should be 0 where no-object is expected
+        loss = K.square(pred_iou - true_ious)
+        return K.divide_no_nan(
+            K.sum(loss * conf_mask, axis = 1),
+            K.cast(K.count_nonzero(conf_mask > 0, axis = 1), loss.dtype)
+        )
     
     def call(self, y_true, y_pred):
         y_true, true_boxes = y_true
         
-        shape = tf.shape(y_true)
-        batch_size  = shape[0]
-        grid_h      = shape[1]
-        grid_w      = shape[2]
-        nb_box      = shape[3]
+        mask    = K.cast(K.reshape(y_true[..., 4], [K.shape(y_pred)[0], -1]), y_pred.dtype)
+        nb_box  = K.sum(mask, axis = 1)
         
-        cell_x = tf.cast(tf.reshape(
-            tf.tile(tf.range(grid_w), [grid_h]), 
-            (1, grid_h, grid_w, 1, 1)
-        ), tf.float32)
-        cell_y = tf.transpose(cell_x, (0,2,1,3,4))
-
-        cell_grid = tf.tile(
-            tf.concat([cell_x, cell_y], axis = -1), [batch_size, 1, 1, nb_box, 1]
+        """ Adjust predictions """
+        pred_xy     = y_pred[..., :2]
+        pred_wh     = y_pred[..., 2:4]
+        pred_conf   = y_pred[..., 4]
+        pred_class  = y_pred[..., 5:]
+        
+        """ Get ground truth """
+        true_xy     = y_true[..., :2]
+        true_wh     = y_true[..., 2:4]
+        true_class  = K.cast(y_true[..., 5], 'int32')
+        
+        """ Compute losses """
+        loss_xy     = self.compute_loss_xy(true_xy, pred_xy, mask, nb_box)
+        loss_wh     = self.compute_loss_wh(true_wh, pred_wh, mask, nb_box)
+        loss_conf   = self.compute_loss_conf(
+            y_true, true_boxes, pred_xy, pred_wh, pred_conf, mask, nb_box
         )
+        loss_class  = self.compute_loss_class(true_class, pred_class, mask, nb_box)
         
-        """
-        Adjust prediction
-        """
-        ### adjust x and y      
-        pred_box_xy = tf.sigmoid(y_pred[..., :2]) + cell_grid
-        
-        ### adjust w and h
-        pred_box_wh = tf.exp(y_pred[..., 2:4]) * self.anchors
-        
-        ### adjust confidence
-        pred_box_conf = tf.sigmoid(y_pred[..., 4])
-        
-        ### adjust class probabilities
-        pred_box_class = tf.nn.softmax(y_pred[..., 5:], axis = -1)
-        
-        """
-        Adjust ground truth
-        """
-        ### adjust x and y
-        true_box_xy = y_true[..., 0:2] # relative position to the containing cell
-        
-        ### adjust w and h
-        true_box_wh = y_true[..., 2:4] # number of cells accross, horizontally and vertically
-        
-        ### adjust confidence
-        true_wh_half = true_box_wh / 2.
-        true_mins    = true_box_xy - true_wh_half
-        true_maxes   = true_box_xy + true_wh_half
-        
-        pred_wh_half = pred_box_wh / 2.
-        pred_mins    = pred_box_xy - pred_wh_half
-        pred_maxes   = pred_box_xy + pred_wh_half       
-        
-        intersect_mins  = tf.maximum(pred_mins,  true_mins)
-        intersect_maxes = tf.minimum(pred_maxes, true_maxes)
-        intersect_wh    = tf.maximum(intersect_maxes - intersect_mins, 0.)
-        intersect_areas = intersect_wh[..., 0] * intersect_wh[..., 1]
-        
-        true_areas = true_box_wh[..., 0] * true_box_wh[..., 1]
-        pred_areas = pred_box_wh[..., 0] * pred_box_wh[..., 1]
-
-        union_areas = pred_areas + true_areas - intersect_areas
-        iou_scores  = tf.math.divide_no_nan(intersect_areas, union_areas)
-        
-        true_box_conf = y_true[..., 4] * iou_scores
-        
-        ### adjust class probabilities
-        true_box_class = y_true[..., 5:]
-        
-        """
-        Determine the masks
-        """
-        ### coordinate mask: simply the position of the ground truth boxes (the predictors)
-        coord_mask = tf.expand_dims(y_true[..., 4], axis=-1) * self.coord_scale
-        
-        ### confidence mask: penelize predictors + penalize boxes with low IOU
-        # penalize the confidence of the boxes, which have IOU with some ground truth box < 0.6
-        true_xy = true_boxes[..., 0:2]
-        true_wh = true_boxes[..., 2:4]
-        
-        true_wh_half = true_wh / 2.
-        true_mins    = true_xy - true_wh_half
-        true_maxes   = true_xy + true_wh_half
-        
-        pred_xy = tf.expand_dims(pred_box_xy, 4)
-        pred_wh = tf.expand_dims(pred_box_wh, 4)
-        
-        pred_wh_half = pred_wh / 2.
-        pred_mins    = pred_xy - pred_wh_half
-        pred_maxes   = pred_xy + pred_wh_half    
-        
-        intersect_mins  = tf.maximum(pred_mins,  true_mins)
-        intersect_maxes = tf.minimum(pred_maxes, true_maxes)
-        intersect_wh    = tf.maximum(intersect_maxes - intersect_mins, 0.)
-        intersect_areas = intersect_wh[..., 0] * intersect_wh[..., 1]
-        
-        true_areas = true_wh[..., 0] * true_wh[..., 1]
-        pred_areas = pred_wh[..., 0] * pred_wh[..., 1]
-
-        union_areas = pred_areas + true_areas - intersect_areas
-        iou_scores  = tf.math.divide_no_nan(intersect_areas, union_areas)
-
-        best_ious = tf.reduce_max(iou_scores, axis = 4)
-        conf_mask = tf.cast(best_ious < 0.6, tf.float32) * (1 - y_true[..., 4]) * self.no_object_scale
-        
-        conf_mask = conf_mask + y_true[..., 4] * self.object_scale
-        
-        #conf_mask = tf.reshape(
-        #    y_true[..., 4] * self.object_scale + (1. - y_true[..., 4]) * self.no_object_scale, [-1, 1]
-        #)
-        
-        ### class mask: simply the position of the ground truth boxes (the predictors)
-        class_mask = y_true[..., 4] * self.class_scale
-        
-        """
-        Warm-up training
-        """
-        no_boxes_mask = tf.cast(coord_mask == 0., tf.float32)
-        
-        true_box_xy, true_box_wh, coord_mask = tf.cond(
-            self.seen < self.warmup_epochs,
-            lambda: [true_box_xy + (0.5 + cell_grid) * no_boxes_mask, 
-                     true_box_wh + tf.ones_like(true_box_wh) * self.anchors * no_boxes_mask, 
-                     tf.ones_like(coord_mask)],
-            lambda: [true_box_xy, true_box_wh, coord_mask]
-        )
-        
-        """
-        Finalize the loss
-        """
-        loss_xy = self.compute_loss(true_box_xy, pred_box_xy, coord_mask, batch_size, 'mse') / 2.
-        loss_wh = self.compute_loss(true_box_wh, pred_box_wh, coord_mask, batch_size, 'mse') / 2.
-        
-        loss_conf   = self.compute_loss(
-            true_box_conf, pred_box_conf, conf_mask, batch_size, 'mse'
-        )
-        loss_class  = self.compute_loss(
-            true_box_class, pred_box_class, class_mask, batch_size, 'categorical'
-        )
-        
-        """loss_conf = tf.reduce_mean(tf.keras.losses.binary_crossentropy(
-            tf.reshape(true_box_conf, [-1, 1]),
-            tf.reshape(pred_box_conf, [-1, 1])
-        ) * tf.reshape(conf_mask, [-1, 1]))"""
-        
-        loss = tf.cond(
-            self.seen < self.warmup_epochs,
-            lambda: loss_xy + loss_wh + loss_conf + loss_class + 10,
-            lambda: loss_xy + loss_wh + loss_conf + loss_class
-        )
-        
-        return tf.stack([loss, loss_xy, loss_wh, loss_conf, loss_class], 0)
+        return {
+            'loss'  : loss_xy + loss_wh + loss_conf + loss_class,
+            'loss_xy'   : loss_xy,
+            'loss_wh'   : loss_wh,
+            'loss_conf' : loss_conf,
+            'loss_class'    : loss_class
+        }
     
     def get_config(self):
         config = super().get_config()
-        config['anchors']   = np.reshape(self.anchors, [-1])
-        
-        config['object_scale']      = self.object_scale.numpy()
-        config['no_object_scale']   = self.no_object_scale.numpy()
-        config['coord_scale']       = self.coord_scale.numpy()
-        config['class_scale']       = self.class_scale.numpy()
-        
-        config['warmup_epochs']     = self.warmup_epochs.numpy()
+        config.update({
+            'object_scale'  : self.object_scale,
+            'no_object_scale'   : self.no_object_scale,
+            'coord_scale'   : self.coord_scale,
+            'class_scale'   : self.class_scale
+        })
         
         return config
+
+def compute_iou(true_xy, true_wh, pred_xy, pred_wh):
+    true_wh_half = true_wh / 2.
+    true_mins    = true_xy - true_wh_half
+    true_maxes   = true_xy + true_wh_half
+
+    pred_wh_half = pred_wh / 2.
+    pred_mins    = pred_xy - pred_wh_half
+    pred_maxes   = pred_xy + pred_wh_half       
+
+    intersect_mins  = K.maximum(pred_mins,  true_mins)
+    intersect_maxes = K.minimum(pred_maxes, true_maxes)
+    intersect_wh    = K.maximum(intersect_maxes - intersect_mins, 0.)
+    intersect_areas = intersect_wh[..., 0] * intersect_wh[..., 1]
+
+    true_areas = true_wh[..., 0] * true_wh[..., 1]
+    pred_areas = pred_wh[..., 0] * pred_wh[..., 1]
+
+    union_areas = pred_areas + true_areas - intersect_areas
+    return K.divide_no_nan(intersect_areas, union_areas)

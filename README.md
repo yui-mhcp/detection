@@ -2,37 +2,28 @@
 
 Check the [CHANGELOG](https://github.com/yui-mhcp/yui-mhcp/blob/main/CHANGELOG.md) file to have a global overview of the latest modifications ! :yum:
 
-**WARNING** : the EAST training procedure is not implemented yet for the current post-processing pipeline inspired from [this repo](https://github.com/SakuraRiven/EAST). It can still be used by using the available pretrained weights !
+**Important Note** : the EAST training procedure is not implemented yet for the current post-processing pipeline inspired from [this repo](https://github.com/SakuraRiven/EAST). It can still be used by using the available pretrained weights ! :smile:
 
 ## Project structure
 
 ```bash
 ├── custom_architectures
-│   ├── unet_arch.py        : defines variants of the UNet architectures (with multiple backbones)
+│   ├── east_arch.py        : defines the EAST architecture with VGG16 backbone
 │   └── yolo_arch.py        : defines the YOLOv2 architecture
 ├── custom_layers
 ├── custom_train_objects
-│   ├── generators
-│   │   └── yolo_generator.py   : generator class for YOLO data (must be cleaned and updated)
 │   ├── losses
-│   │   ├── dice_loss.py        : main DiceLoss class (used in the EASTLoss)
-│   │   ├── east_loss.py        : main EASTLoss class
 │   │   └── yolo_loss.py        : main YOLOLoss class
-├── datasets
-├── hparams
 ├── loggers
 ├── models
 │   ├── detection
 │   │   ├── base_detector.py    : abstract class for object detection models
 │   │   ├── east.py         : main EAST class (rotated bounding box detection based on U-Net model)
 │   │   └── yolo.py         : main YOLO class (object detection)
-├── pretrained_models
-│   └── yolo_backend        : directory where to save the yolo_backend weights
-├── unitest
+├── unitests
 ├── utils
-├── detection.ipynb
-├── example_yolo.ipynb
-└── example_yolo_generator.ipynb
+├── detection.ipynb     : illustrates the use of pretrained models for object / text detection
+└── example_yolo.ipynb  : illustrates a complete YOLOv2 training procedure
 ```
 
 Check [the main project](https://github.com/yui-mhcp/base_dl_project) for more information about the unextended modules / structure / main classes. 
@@ -46,7 +37,7 @@ Check [the main project](https://github.com/yui-mhcp/base_dl_project) for more i
 | detection | `detect`  | detect objects on images / videos and allow multiple saving types (save cropped boxes, detected images, video frames, ...)    |
 | stream    | `stream`  | perform detection on your camera (also allow to save frames) |
 
-You can check the `detection` notebook for a concrete demonstration
+The `detection` notebook provides a concrete demonstration of these functions :smile:
 
 ## Available models
 
@@ -55,23 +46,20 @@ You can check the `detection` notebook for a concrete demonstration
 Available architectures : 
 - `detection` :
     - [YOLOv2](https://pjreddie.com/darknet/yolov2/)
-    - (**experimental**) [EAST](https://arxiv.org/abs/1704.03155)
+    - [EAST](https://arxiv.org/abs/1704.03155)
 
 ### Model weights
 
 | Classes   | Dataset   | Architecture  | Trainer   | Weights   |
 | :-------: | :-------: | :-----------: | :-------: | :-------: |
 | [80 classes](https://github.com/pjreddie/darknet/blob/master/data/coco.names) | [COCO](https://cocodataset.org/#home) | `YOLOv2`  | [YOLOv2's author](https://pjreddie.com/darknet/yolov2/)   | [link](https://pjreddie.com/media/files/yolov2.weights) |
-| `face`    | [Wider Face](http://shuoyang1213.me/WIDERFACE/)    | `YOLOv2`  | [me](https://github.com/yui-mhcp)   | [Google Drive](https://drive.google.com/file/d/1cHP_yjDrpEzu1I5r3Um4GN9KXRCyr1O1/view?usp=sharing) |
-| `kangaroo`    | [experiencor kangaroo](https://github.com/experiencor/kangaroo)  | `YOLOv2`  | [me](https://github.com/yui-mhcp)   | [Google Drive](https://drive.google.com/file/d/12YXnXosb9PIXV9CyxXq-9W3CSr-ObgM-/view?usp=sharing)  |
 
-Models must be unzipped in the `pretrained_models/` directory !
-
-**Important Note** : the official YOLOv2 pretrained model is available as a `yolov2.weights` file. You can find how to create a `YOLO` pretrained model based on these weights in the `detection` notebook.
 
 `pretrained backend` for YOLO can be downloaded at [this link](https://drive.google.com/drive/folders/1lv0s8IAg1AWiiGq7o3H13TJnjp0K9Nh8?usp=sharing). 
 
-The pretrained version of EAST can be downloaded [from this project](https://github.com/SakuraRiven/EAST). It should be set in `pretrained_models/pretrained_weights/east_vgg16.pth` (`torch` is required to transfer the weights : `pip install torch`).
+The pretrained version of EAST can be downloaded [from this project](https://github.com/SakuraRiven/EAST). It should be stored in `pretrained_models/pretrained_weights/east_vgg16.pth` (`torch` is required to transfer the weights : `pip install torch`).
+
+**The previously available `yolo_faces` models wil be published in the next update. Some further `tensorflow -> keras` convertion checks have to be performed.**
 
 ## Installation and usage
 
@@ -80,29 +68,26 @@ The pretrained version of EAST can be downloaded [from this project](https://git
 3. Install requirements : `pip install -r requirements.txt`
 4. Open `detection` notebook and follow the instructions !
 
-**Important Note** : some *heavy* requirements are removed in order to avoid unnecessary installation of such packages (e.g. `torch` and `transformers`), as they are used only in very specific functions.  It is therefore possible that some `ImportError` occurs when using specific functions, such as `TextEncoder.from_transformers_pretrained(...)`. 
-
 ## TO-DO list :
 
 - [x] Make the TO-DO list
 - [x] Support pretrained COCO model
 - [x] Add weights for face detection
 - [x] Add label-based model loading (without manual association)
-- [ ] Improve the face detection model
-- [ ] Add more detection models
-- [ ] Add support for `YOLOv3` and `YOLOv4` models
-- [x] Add segmentation models (such as `U-Net`)
 - [x] Add `producer-consumer` based prediction / streaming
 - [x] Automatically downloads the official YOLOv2 pretrained weights (if not loaded)
 - [x] Add the Locality-Aware Non Maximum Suppression (NMS) method as described in the `EAST` paper
+- [x] Keras 3 support
+- [ ] Convert the pretrained models to be compatible with Keras 3
+- [x] Make comprehensive comparison example between NMS and LANMS
 
 ## Difference between `detection` and `segmentation`
 
 The 2 main methodologies in *object detection* are `detection` with `bounding boxes` and `pixel-wise segmentation`. These 2 approaches tends to detect position of objects in an image but with different level of precision. This difference has an impact on the model architecture as the required output shape is not thesame. 
 
-Here is a comparison of both approaches based on some criteria :
+Here is a simple, non-exhaustive comparison of both approaches based on some criteria :
 
-| Criteria      | Detection                     | Segmentation      |
+| Criterion     | Detection                     | Segmentation      |
 | :-----------: | :---------------------------: | :---------------: |
 | Precision     | Surrounding bounding boxes    | pixel by pixel    |
 | Type of output    | `[x, y, w, h]` (position of bounding boxes)   | mask ([0, 1] probability score for each pixel)  |
@@ -115,20 +100,27 @@ Here is a comparison of both approaches based on some criteria :
 
 \* This is the classical output shape of `YOLO` models. The last dimension is `[x, y, w, h, confidence, * class_score]`
 
+More advanced strategies also exist, differing from the standard methodology described above ;) This aims to be a simple introduction to object detection / segmentation. 
+
 ## Contacts and licence
 
-You can contact [me](https://github.com/yui-mhcp) at yui-mhcp@tutanota.com or on [discord](https://discord.com) at `yui#0732`
+Contacts :
+- **Mail** : `yui-mhcp@tutanota.com`
+- **[Discord](https://discord.com)** : yui0732
 
-The objective of these projects is to facilitate the development and deployment of useful application using Deep Learning for solving real-world problems and helping people. 
-For this purpose, all the code is under the [Affero GPL (AGPL) v3 licence](LICENCE)
+### Terms of use
 
-All my projects are "free software", meaning that you can use, modify, deploy and distribute them on a free basis, in compliance with the Licence. They are not in the public domain and are copyrighted, there exist some conditions on the distribution but their objective is to make sure that everyone is able to use and share any modified version of these projects. 
+The goal of these projects is to support and advance education and research in Deep Learning technology. To facilitate this, all associated code is made available under the [GNU Affero General Public License (AGPL) v3](AGPLv3.licence), supplemented by a clause that prohibits commercial use (cf the [LICENCE](LICENCE) file).
 
-Furthermore, if you want to use any project in a closed-source project, or in a commercial project, you will need to obtain another Licence. Please contact me for more information. 
+These projects are released as "free software", allowing you to freely use, modify, deploy, and share the software, provided you adhere to the terms of the license. While the software is freely available, it is not public domain and retains copyright protection. The license conditions are designed to ensure that every user can utilize and modify any version of the code for their own educational and research projects.
 
-For my protection, it is important to note that all projects are available on an "As Is" basis, without any warranties or conditions of any kind, either explicit or implied. However, do not hesitate to report issues on the repository's project or make a Pull Request to solve it :smile: 
+If you wish to use this project in a proprietary commercial endeavor, you must obtain a separate license. For further details on this process, please contact me directly.
 
-If you use this project in your work, please add this citation to give it more visibility ! :yum:
+For my protection, it is important to note that all projects are available on an "As Is" basis, without any warranties or conditions of any kind, either explicit or implied. However, do not hesitate to report issues on the repository's project, or make a Pull Request to solve it :smile: 
+
+### Citation
+
+If you find this project useful in your work, please add this citation to give it more visibility ! :yum:
 
 ```
 @misc{yui-mhcp
@@ -140,7 +132,7 @@ If you use this project in your work, please add this citation to give it more v
 }
 ```
 
-## Notes and references
+## Notes and references 
 
 The code for the YOLO part of this project is highly inspired from this repo :
 - [1] [experiencor's repository](https://github.com/experiencor/keras-yolo2) : tensorflow 1.x implementation of `YOLOv2` (main inspiration for this repository)
