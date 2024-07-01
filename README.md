@@ -59,8 +59,6 @@ Available architectures :
 
 The pretrained version of EAST can be downloaded [from this project](https://github.com/SakuraRiven/EAST). It should be stored in `pretrained_models/pretrained_weights/east_vgg16.pth` (`torch` is required to transfer the weights : `pip install torch`).
 
-**The previously available `yolo_faces` models wil be published in the next update. Some further `tensorflow -> keras` convertion checks have to be performed.**
-
 ## Installation and usage
 
 1. Clone this repository : `git clone https://github.com/yui-mhcp/detection.git`
@@ -74,11 +72,11 @@ The pretrained version of EAST can be downloaded [from this project](https://git
 - [x] Support pretrained COCO model
 - [x] Add weights for face detection
 - [x] Add label-based model loading (without manual association)
-- [x] Add `producer-consumer` based prediction / streaming
+- [x] Add `producer-consumer` based streaming
 - [x] Automatically downloads the official YOLOv2 pretrained weights (if not loaded)
 - [x] Add the Locality-Aware Non Maximum Suppression (NMS) method as described in the `EAST` paper
 - [x] Keras 3 support
-- [ ] Convert the pretrained models to be compatible with Keras 3
+- [x] Convert the pretrained models to be compatible with Keras 3
 - [x] Make comprehensive comparison example between NMS and LANMS
 
 ## Difference between `detection` and `segmentation`
@@ -135,18 +133,18 @@ If you find this project useful in your work, please add this citation to give i
 ## Notes and references 
 
 The code for the YOLO part of this project is highly inspired from this repo :
-- [1] [experiencor's repository](https://github.com/experiencor/keras-yolo2) : tensorflow 1.x implementation of `YOLOv2` (main inspiration for this repository)
+- [experiencor's repository](https://github.com/experiencor/keras-yolo2) : tensorflow 1.x implementation of `YOLOv2` (main inspiration for this repository)
 The code for the EAST part of this project is highly inspired from this repo :
-- [2] [SakuraRiven pytorch implementation](https://github.com/SakuraRiven/EAST) : pytorch implementation of the EAST paper.
+- [SakuraRiven pytorch implementation](https://github.com/SakuraRiven/EAST) : pytorch implementation of the EAST paper.
 
 
 Papers and tutorials :
-- [3] [YOLO9000 : better, stronger, faster](https://arxiv.org/abs/1612.08242v1) : the original YOLOv2 paper
-- [4] [darknet's website](https://pjreddie.com/darknet/yolov2/) : the official releases of YOLOv2
-- [5] [Gentle guide on how YOLO object detection works](https://hackernoon.com/gentle-guide-on-how-yolo-object-localization-works-with-keras-part-1-aec99277f56f) : good tutorial explaning the image detection mechanism
-- [6] [U-Net: Convolutional Networks for Biomedical Image Segmentation](https://arxiv.org/abs/1505.04597) : U-net original paper
-- [7] [image segmentation tutorials](https://www.tensorflow.org/tutorials/images/segmentation) : U-net implementation in tensorflow + image segmentation tutorial
-- [8] [EAST: An Efficient and Accurate Scene Text Detector](https://arxiv.org/abs/1704.03155) : text detection (with possibly rotated bounding-boxes) with a segmentation model (U-Net). 
+- [YOLO9000 : better, stronger, faster](https://arxiv.org/abs/1612.08242v1) : the original YOLOv2 paper
+- [darknet's website](https://pjreddie.com/darknet/yolov2/) : the official releases of YOLOv2
+- [Gentle guide on how YOLO object detection works](https://hackernoon.com/gentle-guide-on-how-yolo-object-localization-works-with-keras-part-1-aec99277f56f) : good tutorial explaning the image detection mechanism
+- [U-Net: Convolutional Networks for Biomedical Image Segmentation](https://arxiv.org/abs/1505.04597) : U-net original paper
+- [image segmentation tutorials](https://www.tensorflow.org/tutorials/images/segmentation) : U-net implementation in tensorflow + image segmentation tutorial
+- [EAST: An Efficient and Accurate Scene Text Detector](https://arxiv.org/abs/1704.03155) : text detection (with possibly rotated bounding-boxes) with a segmentation model (U-Net). 
 
 Datasets :
 - [COCO](https://cocodataset.org/#home) dataset : 80 labels dataset for object detection in real context
