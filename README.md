@@ -61,10 +61,7 @@ The pretrained version of EAST can be downloaded [from this project](https://git
 
 ## Installation and usage
 
-1. Clone this repository : `git clone https://github.com/yui-mhcp/detection.git`
-2. Go to the root of this repository : `cd detection`
-3. Install requirements : `pip install -r requirements.txt`
-4. Open `detection` notebook and follow the instructions !
+Check [this installagion guide](https://github.com/yui-mhcp/yui-mhcp/blob/main/INSTALLATION.md) for the step-by-step instructions !
 
 ## TO-DO list :
 
