@@ -1,5 +1,5 @@
-# Copyright (C) 2022-now yui-mhcp project author. All rights reserved.
-# Licenced under a modified Affero GPL v3 Licence (the "Licence").
+# Copyright (C) 2025-now yui-mhcp project author. All rights reserved.
+# Licenced under the Affero GPL v3 Licence (the "Licence").
 # you may not use this file except in compliance with the License.
 # See the "LICENCE" file at the root of the directory for the licence information.
 #
@@ -84,7 +84,7 @@ class YoloLoss(LossWithMultipleOutputs):
         # this will be used as target in the loss computation
         true_xywh   = K.reshape(y_true[..., :4], [batch_size, -1, 4])
         
-        true_ious = compute_iou(
+        true_ious = _compute_iou(
             true_xywh[..., :2], true_xywh[..., 2:], pred_xy, pred_wh
         ) * mask
         
@@ -96,7 +96,7 @@ class YoloLoss(LossWithMultipleOutputs):
         true_boxes  = true_boxes[:, None, :, :]
         
         # the computed IoU has shape [batch_size, grid_h * grid_w * nb_box, nb_true_objects]
-        best_ious   = K.max(compute_iou(
+        best_ious   = K.max(_compute_iou(
             true_boxes[:, :, :, :2], true_boxes[:, :, :, 2:], pred_xy, pred_wh
         ), axis = -1)
         # the no_object_mask is equal to 1 at each position where `mask == 0`
@@ -161,7 +161,7 @@ class YoloLoss(LossWithMultipleOutputs):
         
         return config
 
-def compute_iou(true_xy, true_wh, pred_xy, pred_wh):
+def _compute_iou(true_xy, true_wh, pred_xy, pred_wh):
     true_wh_half = true_wh / 2.
     true_mins    = true_xy - true_wh_half
     true_maxes   = true_xy + true_wh_half
